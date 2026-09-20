@@ -77,6 +77,54 @@ const services: Service[] = [
     icon: "🛵",
     description: "Local saman pickup aur delivery",
   },
+  {
+    id: 7,
+    title: "Online / Digital Help",
+    category: "Digital",
+    location: "Lucknow",
+    icon: "💻",
+    description: "Online form, document, app aur digital kaam mein help",
+  },
+  {
+    id: 8,
+    title: "Education Help",
+    category: "Education",
+    location: "Lucknow",
+    icon: "📚",
+    description: "Study, tuition, assignment aur learning help",
+  },
+  {
+    id: 9,
+    title: "Travel Help",
+    category: "Travel",
+    location: "Lucknow",
+    icon: "🧳",
+    description: "Travel planning, booking aur local travel help",
+  },
+  {
+    id: 10,
+    title: "Personal Help",
+    category: "Personal",
+    location: "Lucknow",
+    icon: "🤝",
+    description: "Daily life ki legitimate personal help",
+  },
+  {
+    id: 11,
+    title: "Business Help",
+    category: "Business",
+    location: "Lucknow",
+    icon: "💼",
+    description: "Business, shop, marketing aur professional help",
+  },
+  {
+    id: 12,
+    title: "Other / Custom JUGAAD",
+    category: "Other",
+    location: "Lucknow",
+    icon: "🧩",
+    description: "Jo service list mein nahi hai, woh bhi batao",
+  },
 ];
 
 const categories = [
@@ -86,6 +134,10 @@ const categories = [
   "Delivery",
   "Personal",
   "Business",
+  "Education",
+  "Travel",
+  "Digital",
+  "Other",
 ];
 
 export default function App() {
@@ -629,6 +681,20 @@ export default function App() {
                     batao. Fixed category ki zarurat
                     nahi hai.
                   </p>
+
+                  <button
+                    style={styles.primaryButton}
+                    onClick={() => {
+                      setCategory("Other");
+                      setActiveTab("home");
+                      window.scrollTo({
+                        top: 0,
+                        behavior: "smooth",
+                      });
+                    }}
+                  >
+                    Custom JUGAAD Karo →
+                  </button>
                 </div>
               )}
             </section>
@@ -1016,7 +1082,8 @@ export default function App() {
 
               <p>
                 Electrician, plumber, repair,
-                delivery, cleaning, business help ya
+                delivery, cleaning, education,
+                digital, travel, business help ya
                 koi bhi legitimate real-world
                 service.
               </p>
