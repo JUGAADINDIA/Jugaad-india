@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
-import { createClient } from "@supabase/supabase-js";
+import {
+  createClient,
+  type User,
+} from "@supabase/supabase-js";
 
 const supabase = createClient(
   import.meta.env.VITE_SUPABASE_URL,
@@ -90,9 +93,23 @@ export default function App() {
   const [category, setCategory] = useState("Sab");
   const [message, setMessage] = useState("");
   const [activeTab, setActiveTab] = useState("home");
+
   const [requests, setRequests] = useState<RequestItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingRequests, setLoadingRequests] = useState(false);
+
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  const [authMode, setAuthMode] = useState<"login" | "signup">(
+    "login"
+  );
+
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authName, setAuthName] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authMessage, setAuthMessage] = useState("");
 
   const filteredServices = useMemo(() => {
     return services.filter((service) => {
@@ -114,10 +131,10 @@ export default function App() {
     setLoadingRequests(true);
 
     const {
-      data: { user },
+      data: { user: currentUser },
     } = await supabase.auth.getUser();
 
-    if (!user) {
+    if (!currentUser) {
       setRequests([]);
       setLoadingRequests(false);
       return;
@@ -128,7 +145,7 @@ export default function App() {
       .select(
         "id, need, category, location, status, created_at"
       )
-      .eq("user_id", user.id)
+      .eq("user_id", currentUser.id)
       .order("created_at", { ascending: false });
 
     if (!error && data) {
@@ -139,18 +156,166 @@ export default function App() {
   };
 
   useEffect(() => {
-    loadRequests();
+    const startAuth = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+
+      if (session?.user) {
+        loadRequests();
+      }
+    };
+
+    startAuth();
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(() => {
-      loadRequests();
-    });
+    } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setUser(session?.user ?? null);
+
+        if (session?.user) {
+          loadRequests();
+        } else {
+          setRequests([]);
+        }
+      }
+    );
 
     return () => {
       subscription.unsubscribe();
     };
   }, []);
+
+  const openLogin = () => {
+    setAuthMode("login");
+    setAuthMessage("");
+    setAuthPassword("");
+    setActiveTab("profile");
+  };
+
+  const handleAuth = async () => {
+    setAuthMessage("");
+
+    const email = authEmail.trim();
+
+    if (!email) {
+      setAuthMessage("Email address enter karein.");
+      return;
+    }
+
+    if (!authPassword) {
+      setAuthMessage("Password enter karein.");
+      return;
+    }
+
+    if (authPassword.length < 6) {
+      setAuthMessage(
+        "Password kam se kam 6 characters ka hona chahiye."
+      );
+      return;
+    }
+
+    if (
+      authMode === "signup" &&
+      !authName.trim()
+    ) {
+      setAuthMessage("Apna naam enter karein.");
+      return;
+    }
+
+    setAuthBusy(true);
+
+    if (authMode === "login") {
+      const { data, error } =
+        await supabase.auth.signInWithPassword({
+          email,
+          password: authPassword,
+        });
+
+      setAuthBusy(false);
+
+      if (error) {
+        setAuthMessage(
+          "Login nahi hua: " + error.message
+        );
+        return;
+      }
+
+      setUser(data.user);
+      setAuthMessage("✅ Login successful!");
+
+      setAuthPassword("");
+
+      await loadRequests();
+
+      setTimeout(() => {
+        setActiveTab("home");
+        setAuthMessage("");
+      }, 700);
+
+      return;
+    }
+
+    const { data, error } =
+      await supabase.auth.signUp({
+        email,
+        password: authPassword,
+        options: {
+          data: {
+            full_name: authName.trim(),
+          },
+        },
+      });
+
+    setAuthBusy(false);
+
+    if (error) {
+      setAuthMessage(
+        "Account create nahi hua: " + error.message
+      );
+      return;
+    }
+
+    if (data.session && data.user) {
+      setUser(data.user);
+      setAuthMessage(
+        "✅ Account create ho gaya!"
+      );
+
+      setAuthPassword("");
+
+      await loadRequests();
+
+      setTimeout(() => {
+        setActiveTab("home");
+        setAuthMessage("");
+      }, 700);
+    } else {
+      setAuthMessage(
+        "✅ Account create ho gaya. Email inbox check karke verification complete karein, phir Login karein."
+      );
+      setAuthMode("login");
+      setAuthPassword("");
+    }
+  };
+
+  const logout = async () => {
+    await supabase.auth.signOut();
+
+    setUser(null);
+    setRequests([]);
+    setAuthEmail("");
+    setAuthPassword("");
+    setAuthName("");
+    setAuthMessage("");
+    setActiveTab("home");
+
+    alert("Aap logout ho gaye.");
+  };
 
   const askJugaad = async () => {
     if (!message.trim()) {
@@ -158,38 +323,57 @@ export default function App() {
       return;
     }
 
-    setLoading(true);
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
     if (!user) {
-      setLoading(false);
-      alert(
-        "Request bhejne ke liye pehle JUGAAD account mein login karna hoga."
-      );
       setActiveTab("profile");
+      setAuthMode("login");
+      setAuthMessage(
+        "Request bhejne ke liye pehle JUGAAD account mein login karein."
+      );
       return;
     }
 
-    const { error } = await supabase.from("requests").insert({
-      user_id: user.id,
-      need: message.trim(),
-      category: category === "Sab" ? null : category,
-      location: "Lucknow",
-      status: "pending",
-    });
+    setLoading(true);
+
+    const {
+      data: { user: currentUser },
+    } = await supabase.auth.getUser();
+
+    if (!currentUser) {
+      setLoading(false);
+      setUser(null);
+      setActiveTab("profile");
+      setAuthMode("login");
+      setAuthMessage(
+        "Session expire ho gaya. Dobara login karein."
+      );
+      return;
+    }
+
+    const { error } = await supabase
+      .from("requests")
+      .insert({
+        user_id: currentUser.id,
+        need: message.trim(),
+        category:
+          category === "Sab" ? null : category,
+        location: "Lucknow",
+        status: "pending",
+      });
 
     setLoading(false);
 
     if (error) {
-      alert("Request save nahi hui:\n\n" + error.message);
+      alert(
+        "Request save nahi hui:\n\n" +
+          error.message
+      );
       return;
     }
 
     setMessage("");
+
     await loadRequests();
+
     setActiveTab("requests");
 
     alert(
@@ -197,20 +381,22 @@ export default function App() {
     );
   };
 
-  const connectService = async (service: Service) => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-
+  const connectService = async (
+    service: Service
+  ) => {
     if (!user) {
-      alert(
+      setActiveTab("profile");
+      setAuthMode("login");
+      setAuthMessage(
         "Service se connect karne ke liye pehle JUGAAD account mein login karein."
       );
-      setActiveTab("profile");
       return;
     }
 
-    setMessage(`${service.title} ki zarurat hai - ${service.description}`);
+    setMessage(
+      `${service.title} ki zarurat hai - ${service.description}`
+    );
+
     setCategory(service.category);
     setActiveTab("home");
 
@@ -228,17 +414,38 @@ export default function App() {
     return status;
   };
 
+  if (authLoading) {
+    return (
+      <div style={styles.loadingScreen}>
+        <div style={styles.loadingLogo}>
+          JUGAAD
+        </div>
+        <div style={styles.muted}>
+          Loading...
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={styles.page}>
       <header style={styles.header}>
         <div>
           <div style={styles.logo}>JUGAAD</div>
+
           <div style={styles.tagline}>
             Har zarurat ka jugaad 🇮🇳
           </div>
         </div>
 
-        <button style={styles.locationButton}>
+        <button
+          style={styles.locationButton}
+          onClick={() =>
+            alert(
+              "📍 Current location: Lucknow"
+            )
+          }
+        >
           📍 Lucknow
         </button>
       </header>
@@ -253,20 +460,24 @@ export default function App() {
 
               <h1 style={styles.heroTitle}>
                 Jo chahiye,{" "}
-                <span style={styles.highlight}>JUGAAD</span>{" "}
+                <span style={styles.highlight}>
+                  JUGAAD
+                </span>{" "}
                 se milega.
               </h1>
 
               <p style={styles.heroText}>
-                Apni zarurat apne words mein batao. JUGAAD
-                aapko sahi person, service ya resource se
-                connect karega.
+                Apni zarurat apne words mein batao.
+                JUGAAD aapko sahi person, service ya
+                resource se connect karega.
               </p>
 
               <div style={styles.needBox}>
                 <textarea
                   value={message}
-                  onChange={(e) => setMessage(e.target.value)}
+                  onChange={(e) =>
+                    setMessage(e.target.value)
+                  }
                   placeholder="Aapko kis cheez ki zarurat hai?"
                   style={styles.textarea}
                 />
@@ -319,7 +530,9 @@ export default function App() {
                 {categories.map((item) => (
                   <button
                     key={item}
-                    onClick={() => setCategory(item)}
+                    onClick={() =>
+                      setCategory(item)
+                    }
                     style={{
                       ...styles.categoryButton,
                       ...(category === item
@@ -344,6 +557,7 @@ export default function App() {
 
               <div style={styles.searchBox}>
                 🔎
+
                 <input
                   value={search}
                   onChange={(e) =>
@@ -355,39 +569,57 @@ export default function App() {
               </div>
 
               <div style={styles.grid}>
-                {filteredServices.map((service) => (
-                  <div
-                    key={service.id}
-                    style={styles.card}
-                  >
-                    <div style={styles.cardIcon}>
-                      {service.icon}
-                    </div>
-
-                    <div style={styles.cardContent}>
-                      <h3 style={styles.cardTitle}>
-                        {service.title}
-                      </h3>
-
-                      <p style={styles.cardDescription}>
-                        {service.description}
-                      </p>
-
-                      <div style={styles.cardLocation}>
-                        📍 {service.location}
+                {filteredServices.map(
+                  (service) => (
+                    <div
+                      key={service.id}
+                      style={styles.card}
+                    >
+                      <div style={styles.cardIcon}>
+                        {service.icon}
                       </div>
 
-                      <button
-                        style={styles.connectButton}
-                        onClick={() =>
-                          connectService(service)
-                        }
+                      <div
+                        style={styles.cardContent}
                       >
-                        Connect →
-                      </button>
+                        <h3
+                          style={styles.cardTitle}
+                        >
+                          {service.title}
+                        </h3>
+
+                        <p
+                          style={
+                            styles.cardDescription
+                          }
+                        >
+                          {service.description}
+                        </p>
+
+                        <div
+                          style={
+                            styles.cardLocation
+                          }
+                        >
+                          📍 {service.location}
+                        </div>
+
+                        <button
+                          style={
+                            styles.connectButton
+                          }
+                          onClick={() =>
+                            connectService(
+                              service
+                            )
+                          }
+                        >
+                          Connect →
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                )}
               </div>
 
               {filteredServices.length === 0 && (
@@ -395,10 +627,13 @@ export default function App() {
                   <div style={styles.emptyIcon}>
                     🔎
                   </div>
+
                   <h3>Service nahi mili?</h3>
+
                   <p>
-                    Upar apni zarurat JUGAAD ko batao.
-                    Fixed category ki zarurat nahi hai.
+                    Upar apni zarurat JUGAAD ko
+                    batao. Fixed category ki zarurat
+                    nahi hai.
                   </p>
                 </div>
               )}
@@ -416,7 +651,27 @@ export default function App() {
               Aapki JUGAAD requests yahan dikhengi.
             </p>
 
-            {loadingRequests ? (
+            {!user ? (
+              <div style={styles.empty}>
+                <div style={styles.emptyIcon}>
+                  🔐
+                </div>
+
+                <h3>Login required</h3>
+
+                <p>
+                  Apni requests dekhne ke liye
+                  JUGAAD account mein login karein.
+                </p>
+
+                <button
+                  style={styles.primaryButton}
+                  onClick={openLogin}
+                >
+                  Login / Sign Up →
+                </button>
+              </div>
+            ) : loadingRequests ? (
               <div style={styles.empty}>
                 Requests load ho rahi hain...
               </div>
@@ -425,15 +680,21 @@ export default function App() {
                 <div style={styles.emptyIcon}>
                   📋
                 </div>
-                <h3>Abhi koi request nahi hai</h3>
+
+                <h3>
+                  Abhi koi request nahi hai
+                </h3>
+
                 <p>
-                  Apni zarurat batane ke liye JUGAAD
-                  Karo button use karein.
+                  Apni zarurat batane ke liye
+                  JUGAAD Karo button use karein.
                 </p>
 
                 <button
                   style={styles.primaryButton}
-                  onClick={() => setActiveTab("home")}
+                  onClick={() =>
+                    setActiveTab("home")
+                  }
                 >
                   JUGAAD Karo →
                 </button>
@@ -446,7 +707,11 @@ export default function App() {
                     style={styles.requestCard}
                   >
                     <div style={styles.requestTop}>
-                      <span style={styles.requestIcon}>
+                      <span
+                        style={
+                          styles.requestIcon
+                        }
+                      >
                         🧩
                       </span>
 
@@ -463,25 +728,39 @@ export default function App() {
                               : "#fff1b8",
                         }}
                       >
-                        {statusText(request.status)}
+                        {statusText(
+                          request.status
+                        )}
                       </span>
                     </div>
 
-                    <h3 style={styles.requestTitle}>
+                    <h3
+                      style={styles.requestTitle}
+                    >
                       {request.need}
                     </h3>
 
-                    <div style={styles.requestMeta}>
-                      📍 {request.location || "India"}
+                    <div
+                      style={styles.requestMeta}
+                    >
+                      📍{" "}
+                      {request.location ||
+                        "India"}
                     </div>
 
                     {request.category && (
-                      <div style={styles.requestMeta}>
+                      <div
+                        style={
+                          styles.requestMeta
+                        }
+                      >
                         🏷️ {request.category}
                       </div>
                     )}
 
-                    <div style={styles.requestDate}>
+                    <div
+                      style={styles.requestDate}
+                    >
                       {new Date(
                         request.created_at
                       ).toLocaleString("en-IN")}
@@ -495,7 +774,9 @@ export default function App() {
 
         {activeTab === "profile" && (
           <section style={styles.profilePage}>
-            <div style={styles.profileIcon}>👤</div>
+            <div style={styles.profileIcon}>
+              👤
+            </div>
 
             <h1 style={styles.pageTitle}>
               JUGAAD Profile
@@ -505,7 +786,213 @@ export default function App() {
               Account information
             </p>
 
-            <ProfileInfo />
+            {user ? (
+              <>
+                <div style={styles.profileCard}>
+                  <div style={styles.profileRow}>
+                    <span>Account</span>
+
+                    <strong
+                      style={{
+                        wordBreak: "break-word",
+                        textAlign: "right",
+                      }}
+                    >
+                      {user.email}
+                    </strong>
+                  </div>
+
+                  <div
+                    style={styles.profileRow}
+                  >
+                    <span>Status</span>
+
+                    <strong
+                      style={{
+                        color: "#16833a",
+                      }}
+                    >
+                      ✓ Logged in
+                    </strong>
+                  </div>
+
+                  <div
+                    style={styles.profileRow}
+                  >
+                    <span>Location</span>
+
+                    <strong>
+                      📍 Lucknow
+                    </strong>
+                  </div>
+
+                  <div
+                    style={styles.profileRow}
+                  >
+                    <span>Platform</span>
+
+                    <strong>
+                      JUGAAD India
+                    </strong>
+                  </div>
+                </div>
+
+                <button
+                  style={styles.logoutButton}
+                  onClick={logout}
+                >
+                  Logout
+                </button>
+              </>
+            ) : (
+              <>
+                <div
+                  style={styles.authCard}
+                >
+                  <div
+                    style={
+                      styles.authTabs
+                    }
+                  >
+                    <button
+                      style={{
+                        ...styles.authTab,
+                        ...(authMode ===
+                        "login"
+                          ? styles.authTabActive
+                          : {}),
+                      }}
+                      onClick={() => {
+                        setAuthMode("login");
+                        setAuthMessage("");
+                      }}
+                    >
+                      Login
+                    </button>
+
+                    <button
+                      style={{
+                        ...styles.authTab,
+                        ...(authMode ===
+                        "signup"
+                          ? styles.authTabActive
+                          : {}),
+                      }}
+                      onClick={() => {
+                        setAuthMode("signup");
+                        setAuthMessage("");
+                      }}
+                    >
+                      Sign Up
+                    </button>
+                  </div>
+
+                  {authMode === "signup" && (
+                    <input
+                      value={authName}
+                      onChange={(e) =>
+                        setAuthName(
+                          e.target.value
+                        )
+                      }
+                      placeholder="Aapka naam"
+                      style={styles.authInput}
+                    />
+                  )}
+
+                  <input
+                    type="email"
+                    value={authEmail}
+                    onChange={(e) =>
+                      setAuthEmail(
+                        e.target.value
+                      )
+                    }
+                    placeholder="Email address"
+                    style={styles.authInput}
+                    autoComplete="email"
+                  />
+
+                  <input
+                    type="password"
+                    value={authPassword}
+                    onChange={(e) =>
+                      setAuthPassword(
+                        e.target.value
+                      )
+                    }
+                    placeholder="Password"
+                    style={styles.authInput}
+                    autoComplete={
+                      authMode === "login"
+                        ? "current-password"
+                        : "new-password"
+                    }
+                  />
+
+                  {authMessage && (
+                    <div
+                      style={
+                        styles.authMessage
+                      }
+                    >
+                      {authMessage}
+                    </div>
+                  )}
+
+                  <button
+                    style={{
+                      ...styles.authButton,
+                      opacity: authBusy
+                        ? 0.6
+                        : 1,
+                    }}
+                    onClick={handleAuth}
+                    disabled={authBusy}
+                  >
+                    {authBusy
+                      ? "Please wait..."
+                      : authMode === "login"
+                      ? "Login →"
+                      : "Create Account →"}
+                  </button>
+
+                  <p
+                    style={
+                      styles.authHint
+                    }
+                  >
+                    {authMode === "login"
+                      ? "Account nahi hai? Upar Sign Up select karein."
+                      : "Account already hai? Upar Login select karein."}
+                  </p>
+                </div>
+
+                <div
+                  style={styles.profileCard}
+                >
+                  <div
+                    style={styles.profileRow}
+                  >
+                    <span>Location</span>
+
+                    <strong>
+                      📍 Lucknow
+                    </strong>
+                  </div>
+
+                  <div
+                    style={styles.profileRow}
+                  >
+                    <span>Platform</span>
+
+                    <strong>
+                      JUGAAD India
+                    </strong>
+                  </div>
+                </div>
+              </>
+            )}
           </section>
         )}
 
@@ -516,21 +1003,31 @@ export default function App() {
             </h1>
 
             <p style={styles.muted}>
-              Kisi bhi service ya help ko search karein.
+              Kisi bhi service ya help ko search
+              karein.
             </p>
 
             <div style={styles.exploreBox}>
-              <div style={styles.bigEmoji}>🧩</div>
-              <h2>Har zarurat ka JUGAAD</h2>
+              <div style={styles.bigEmoji}>
+                🧩
+              </div>
+
+              <h2>
+                Har zarurat ka JUGAAD
+              </h2>
+
               <p>
-                Electrician, plumber, repair, delivery,
-                cleaning, business help ya koi bhi
-                legitimate real-world service.
+                Electrician, plumber, repair,
+                delivery, cleaning, business help ya
+                koi bhi legitimate real-world
+                service.
               </p>
 
               <button
                 style={styles.primaryButton}
-                onClick={() => setActiveTab("home")}
+                onClick={() =>
+                  setActiveTab("home")
+                }
               >
                 Apni Zarurat Batao →
               </button>
@@ -546,7 +1043,9 @@ export default function App() {
               ? styles.navItemActive
               : styles.navItem
           }
-          onClick={() => setActiveTab("home")}
+          onClick={() =>
+            setActiveTab("home")
+          }
         >
           🏠
           <span>Home</span>
@@ -558,7 +1057,9 @@ export default function App() {
               ? styles.navItemActive
               : styles.navItem
           }
-          onClick={() => setActiveTab("explore")}
+          onClick={() =>
+            setActiveTab("explore")
+          }
         >
           🔎
           <span>Explore</span>
@@ -568,6 +1069,7 @@ export default function App() {
           style={styles.navJugaad}
           onClick={() => {
             setActiveTab("home");
+
             setTimeout(() => {
               window.scrollTo({
                 top: 0,
@@ -600,43 +1102,14 @@ export default function App() {
               ? styles.navItemActive
               : styles.navItem
           }
-          onClick={() => setActiveTab("profile")}
+          onClick={() =>
+            setActiveTab("profile")
+          }
         >
           👤
           <span>Profile</span>
         </button>
       </nav>
-    </div>
-  );
-}
-
-function ProfileInfo() {
-  const [email, setEmail] = useState<string | null>(null);
-
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      setEmail(data.user?.email ?? null);
-    });
-  }, []);
-
-  return (
-    <div style={styles.profileCard}>
-      <div style={styles.profileRow}>
-        <span>Account</span>
-        <strong>
-          {email || "Login required"}
-        </strong>
-      </div>
-
-      <div style={styles.profileRow}>
-        <span>Location</span>
-        <strong>📍 Lucknow</strong>
-      </div>
-
-      <div style={styles.profileRow}>
-        <span>Platform</span>
-        <strong>JUGAAD India</strong>
-      </div>
     </div>
   );
 }
@@ -649,6 +1122,22 @@ const styles: Record<string, CSSProperties> = {
     fontFamily:
       "Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
     paddingBottom: 90,
+  },
+
+  loadingScreen: {
+    minHeight: "100vh",
+    background: "#fffdf7",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+
+  loadingLogo: {
+    fontSize: 32,
+    fontWeight: 900,
+    letterSpacing: 1,
   },
 
   header: {
@@ -681,6 +1170,7 @@ const styles: Record<string, CSSProperties> = {
     borderRadius: 20,
     padding: "9px 13px",
     fontWeight: 600,
+    cursor: "pointer",
   },
 
   container: {
@@ -693,7 +1183,8 @@ const styles: Record<string, CSSProperties> = {
     background: "#ffdd00",
     borderRadius: 26,
     padding: 22,
-    boxShadow: "0 8px 25px rgba(0,0,0,0.08)",
+    boxShadow:
+      "0 8px 25px rgba(0,0,0,0.08)",
   },
 
   heroBadge: {
@@ -1002,6 +1493,89 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 14,
   },
 
+  authCard: {
+    background: "#fff",
+    borderRadius: 20,
+    border: "1px solid #eee",
+    marginTop: 25,
+    padding: 18,
+    textAlign: "left",
+    boxShadow:
+      "0 8px 25px rgba(0,0,0,0.05)",
+  },
+
+  authTabs: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 8,
+    marginBottom: 18,
+  },
+
+  authTab: {
+    border: "1px solid #ddd",
+    background: "#fff",
+    borderRadius: 12,
+    padding: "11px",
+    fontWeight: 800,
+    cursor: "pointer",
+  },
+
+  authTabActive: {
+    background: "#ffdd00",
+    borderColor: "#ffdd00",
+  },
+
+  authInput: {
+    width: "100%",
+    boxSizing: "border-box",
+    border: "1px solid #ddd",
+    borderRadius: 12,
+    padding: "13px",
+    marginBottom: 11,
+    outline: "none",
+    fontSize: 15,
+    fontFamily: "inherit",
+  },
+
+  authButton: {
+    width: "100%",
+    border: "none",
+    background: "#171717",
+    color: "#fff",
+    borderRadius: 12,
+    padding: "13px",
+    fontWeight: 800,
+    fontSize: 15,
+    cursor: "pointer",
+  },
+
+  authMessage: {
+    background: "#fff8cf",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+    fontSize: 13,
+    lineHeight: 1.4,
+  },
+
+  authHint: {
+    textAlign: "center",
+    color: "#777",
+    fontSize: 12,
+    margin: "13px 0 0",
+  },
+
+  logoutButton: {
+    marginTop: 18,
+    border: "1px solid #e33",
+    background: "#fff",
+    color: "#d22",
+    borderRadius: 12,
+    padding: "12px 25px",
+    fontWeight: 800,
+    cursor: "pointer",
+  },
+
   exploreBox: {
     background: "#ffdd00",
     borderRadius: 24,
@@ -1062,7 +1636,8 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 27,
     fontWeight: 900,
     marginTop: -25,
-    boxShadow: "0 4px 15px rgba(0,0,0,0.18)",
+    boxShadow:
+      "0 4px 15px rgba(0,0,0,0.18)",
     cursor: "pointer",
   },
 };
