@@ -101,13 +101,9 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
-  const [authMode, setAuthMode] = useState<"login" | "signup">(
-    "login"
-  );
-
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
-  const [authName, setAuthName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [otp, setOtp] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
   const [authBusy, setAuthBusy] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
 
@@ -191,102 +187,108 @@ export default function App() {
   }, []);
 
   const openLogin = () => {
-    setAuthMode("login");
     setAuthMessage("");
-    setAuthPassword("");
+    setOtp("");
+    setOtpSent(false);
     setActiveTab("profile");
   };
 
-  const handleAuth = async () => {
+  const normalizePhone = (value: string) => {
+    const cleaned = value.replace(/\D/g, "");
+
+    if (cleaned.startsWith("91") && cleaned.length === 12) {
+      return "+" + cleaned;
+    }
+
+    if (cleaned.length === 10) {
+      return "+91" + cleaned;
+    }
+
+    return "";
+  };
+
+  const sendOtp = async () => {
     setAuthMessage("");
 
-    const email = authEmail.trim();
+    const normalizedPhone = normalizePhone(phone);
 
-    if (!email) {
-      setAuthMessage("Email address enter karein.");
-      return;
-    }
-
-    if (!authPassword) {
-      setAuthMessage("Password enter karein.");
-      return;
-    }
-
-    if (authPassword.length < 6) {
+    if (!normalizedPhone) {
       setAuthMessage(
-        "Password kam se kam 6 characters ka hona chahiye."
+        "Please apna 10 digit Indian mobile number enter karein."
       );
-      return;
-    }
-
-    if (
-      authMode === "signup" &&
-      !authName.trim()
-    ) {
-      setAuthMessage("Apna naam enter karein.");
       return;
     }
 
     setAuthBusy(true);
 
-    if (authMode === "login") {
-      const { data, error } =
-        await supabase.auth.signInWithPassword({
-          email,
-          password: authPassword,
-        });
+    const { error } = await supabase.auth.signInWithOtp({
+      phone: normalizedPhone,
+      options: {
+        shouldCreateUser: true,
+      },
+    });
 
-      setAuthBusy(false);
+    setAuthBusy(false);
 
-      if (error) {
-        setAuthMessage(
-          "Login nahi hua: " + error.message
-        );
-        return;
-      }
-
-      setUser(data.user);
-      setAuthMessage("✅ Login successful!");
-
-      setAuthPassword("");
-
-      await loadRequests();
-
-      setTimeout(() => {
-        setActiveTab("home");
-        setAuthMessage("");
-      }, 700);
-
+    if (error) {
+      setAuthMessage(
+        "OTP send nahi hua: " + error.message
+      );
       return;
     }
 
+    setPhone(normalizedPhone.replace("+91", ""));
+    setOtpSent(true);
+    setAuthMessage(
+      "✅ OTP aapke mobile number par bheja gaya hai."
+    );
+  };
+
+  const verifyOtp = async () => {
+    setAuthMessage("");
+
+    const normalizedPhone = normalizePhone(phone);
+
+    if (!normalizedPhone) {
+      setAuthMessage(
+        "Mobile number sahi enter karein."
+      );
+      return;
+    }
+
+    if (!otp.trim()) {
+      setAuthMessage("OTP enter karein.");
+      return;
+    }
+
+    if (otp.trim().length !== 6) {
+      setAuthMessage("6 digit OTP enter karein.");
+      return;
+    }
+
+    setAuthBusy(true);
+
     const { data, error } =
-      await supabase.auth.signUp({
-        email,
-        password: authPassword,
-        options: {
-          data: {
-            full_name: authName.trim(),
-          },
-        },
+      await supabase.auth.verifyOtp({
+        phone: normalizedPhone,
+        token: otp.trim(),
+        type: "sms",
       });
 
     setAuthBusy(false);
 
     if (error) {
       setAuthMessage(
-        "Account create nahi hua: " + error.message
+        "OTP verify nahi hua: " + error.message
       );
       return;
     }
 
-    if (data.session && data.user) {
+    if (data.user) {
       setUser(data.user);
-      setAuthMessage(
-        "✅ Account create ho gaya!"
-      );
-
-      setAuthPassword("");
+      setOtp("");
+      setOtpSent(false);
+      setAuthMessage("✅ Login successful!");
 
       await loadRequests();
 
@@ -294,12 +296,6 @@ export default function App() {
         setActiveTab("home");
         setAuthMessage("");
       }, 700);
-    } else {
-      setAuthMessage(
-        "✅ Account create ho gaya. Email inbox check karke verification complete karein, phir Login karein."
-      );
-      setAuthMode("login");
-      setAuthPassword("");
     }
   };
 
@@ -308,9 +304,9 @@ export default function App() {
 
     setUser(null);
     setRequests([]);
-    setAuthEmail("");
-    setAuthPassword("");
-    setAuthName("");
+    setPhone("");
+    setOtp("");
+    setOtpSent(false);
     setAuthMessage("");
     setActiveTab("home");
 
@@ -325,9 +321,8 @@ export default function App() {
 
     if (!user) {
       setActiveTab("profile");
-      setAuthMode("login");
       setAuthMessage(
-        "Request bhejne ke liye pehle JUGAAD account mein login karein."
+        "Request bhejne ke liye pehle mobile number se login karein."
       );
       return;
     }
@@ -342,9 +337,8 @@ export default function App() {
       setLoading(false);
       setUser(null);
       setActiveTab("profile");
-      setAuthMode("login");
       setAuthMessage(
-        "Session expire ho gaya. Dobara login karein."
+        "Session expire ho gaya. Dobara mobile number se login karein."
       );
       return;
     }
@@ -386,9 +380,8 @@ export default function App() {
   ) => {
     if (!user) {
       setActiveTab("profile");
-      setAuthMode("login");
       setAuthMessage(
-        "Service se connect karne ke liye pehle JUGAAD account mein login karein."
+        "Service se connect karne ke liye pehle mobile number se login karein."
       );
       return;
     }
@@ -420,6 +413,7 @@ export default function App() {
         <div style={styles.loadingLogo}>
           JUGAAD
         </div>
+
         <div style={styles.muted}>
           Loading...
         </div>
@@ -661,14 +655,14 @@ export default function App() {
 
                 <p>
                   Apni requests dekhne ke liye
-                  JUGAAD account mein login karein.
+                  mobile number se login karein.
                 </p>
 
                 <button
                   style={styles.primaryButton}
                   onClick={openLogin}
                 >
-                  Login / Sign Up →
+                  Mobile Login →
                 </button>
               </div>
             ) : loadingRequests ? (
@@ -783,22 +777,17 @@ export default function App() {
             </h1>
 
             <p style={styles.muted}>
-              Account information
+              Mobile account
             </p>
 
             {user ? (
               <>
                 <div style={styles.profileCard}>
                   <div style={styles.profileRow}>
-                    <span>Account</span>
+                    <span>Mobile</span>
 
-                    <strong
-                      style={{
-                        wordBreak: "break-word",
-                        textAlign: "right",
-                      }}
-                    >
-                      {user.email}
+                    <strong>
+                      {user.phone || "Mobile user"}
                     </strong>
                   </div>
 
@@ -849,86 +838,54 @@ export default function App() {
                 <div
                   style={styles.authCard}
                 >
-                  <div
-                    style={
-                      styles.authTabs
-                    }
-                  >
-                    <button
-                      style={{
-                        ...styles.authTab,
-                        ...(authMode ===
-                        "login"
-                          ? styles.authTabActive
-                          : {}),
-                      }}
-                      onClick={() => {
-                        setAuthMode("login");
-                        setAuthMessage("");
-                      }}
-                    >
-                      Login
-                    </button>
+                  <h2 style={styles.authTitle}>
+                    Mobile se Login
+                  </h2>
 
-                    <button
-                      style={{
-                        ...styles.authTab,
-                        ...(authMode ===
-                        "signup"
-                          ? styles.authTabActive
-                          : {}),
-                      }}
-                      onClick={() => {
-                        setAuthMode("signup");
-                        setAuthMessage("");
-                      }}
-                    >
-                      Sign Up
-                    </button>
-                  </div>
+                  <p style={styles.authDescription}>
+                    Apna mobile number enter karein.
+                    OTP ke through account login
+                    hoga.
+                  </p>
 
-                  {authMode === "signup" && (
+                  <div style={styles.phoneInputRow}>
+                    <div style={styles.countryCode}>
+                      +91
+                    </div>
+
                     <input
-                      value={authName}
+                      type="tel"
+                      inputMode="numeric"
+                      value={phone}
                       onChange={(e) =>
-                        setAuthName(
+                        setPhone(
                           e.target.value
+                            .replace(/\D/g, "")
+                            .slice(0, 10)
                         )
                       }
-                      placeholder="Aapka naam"
+                      placeholder="10 digit mobile number"
+                      style={styles.phoneInput}
+                      disabled={otpSent}
+                    />
+                  </div>
+
+                  {otpSent && (
+                    <input
+                      type="tel"
+                      inputMode="numeric"
+                      value={otp}
+                      onChange={(e) =>
+                        setOtp(
+                          e.target.value
+                            .replace(/\D/g, "")
+                            .slice(0, 6)
+                        )
+                      }
+                      placeholder="6 digit OTP"
                       style={styles.authInput}
                     />
                   )}
-
-                  <input
-                    type="email"
-                    value={authEmail}
-                    onChange={(e) =>
-                      setAuthEmail(
-                        e.target.value
-                      )
-                    }
-                    placeholder="Email address"
-                    style={styles.authInput}
-                    autoComplete="email"
-                  />
-
-                  <input
-                    type="password"
-                    value={authPassword}
-                    onChange={(e) =>
-                      setAuthPassword(
-                        e.target.value
-                      )
-                    }
-                    placeholder="Password"
-                    style={styles.authInput}
-                    autoComplete={
-                      authMode === "login"
-                        ? "current-password"
-                        : "new-password"
-                    }
-                  />
 
                   {authMessage && (
                     <div
@@ -940,37 +897,78 @@ export default function App() {
                     </div>
                   )}
 
-                  <button
-                    style={{
-                      ...styles.authButton,
-                      opacity: authBusy
-                        ? 0.6
-                        : 1,
-                    }}
-                    onClick={handleAuth}
-                    disabled={authBusy}
-                  >
-                    {authBusy
-                      ? "Please wait..."
-                      : authMode === "login"
-                      ? "Login →"
-                      : "Create Account →"}
-                  </button>
+                  {!otpSent ? (
+                    <button
+                      style={{
+                        ...styles.authButton,
+                        opacity: authBusy
+                          ? 0.6
+                          : 1,
+                      }}
+                      onClick={sendOtp}
+                      disabled={authBusy}
+                    >
+                      {authBusy
+                        ? "OTP bhej rahe hain..."
+                        : "OTP Bhejo →"}
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        style={{
+                          ...styles.authButton,
+                          opacity: authBusy
+                            ? 0.6
+                            : 1,
+                        }}
+                        onClick={verifyOtp}
+                        disabled={authBusy}
+                      >
+                        {authBusy
+                          ? "Verify ho raha hai..."
+                          : "OTP Verify Karo →"}
+                      </button>
 
-                  <p
-                    style={
-                      styles.authHint
-                    }
-                  >
-                    {authMode === "login"
-                      ? "Account nahi hai? Upar Sign Up select karein."
-                      : "Account already hai? Upar Login select karein."}
-                  </p>
+                      <button
+                        style={
+                          styles.secondaryAuthButton
+                        }
+                        onClick={() => {
+                          setOtpSent(false);
+                          setOtp("");
+                          setAuthMessage("");
+                        }}
+                        disabled={authBusy}
+                      >
+                        Number Change Karein
+                      </button>
+
+                      <button
+                        style={
+                          styles.resendButton
+                        }
+                        onClick={sendOtp}
+                        disabled={authBusy}
+                      >
+                        OTP Dobara Bhejo
+                      </button>
+                    </>
+                  )}
                 </div>
 
                 <div
                   style={styles.profileCard}
                 >
+                  <div
+                    style={styles.profileRow}
+                  >
+                    <span>Login method</span>
+
+                    <strong>
+                      📱 Mobile + OTP
+                    </strong>
+                  </div>
+
                   <div
                     style={styles.profileRow}
                   >
@@ -1504,25 +1502,45 @@ const styles: Record<string, CSSProperties> = {
       "0 8px 25px rgba(0,0,0,0.05)",
   },
 
-  authTabs: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 8,
+  authTitle: {
+    margin: "0 0 7px",
+    fontSize: 22,
+    fontWeight: 900,
+  },
+
+  authDescription: {
+    color: "#777",
+    fontSize: 13,
+    lineHeight: 1.5,
     marginBottom: 18,
   },
 
-  authTab: {
-    border: "1px solid #ddd",
-    background: "#fff",
-    borderRadius: 12,
-    padding: "11px",
-    fontWeight: 800,
-    cursor: "pointer",
+  phoneInputRow: {
+    display: "flex",
+    gap: 8,
+    marginBottom: 11,
   },
 
-  authTabActive: {
-    background: "#ffdd00",
-    borderColor: "#ffdd00",
+  countryCode: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 58,
+    border: "1px solid #ddd",
+    borderRadius: 12,
+    background: "#f7f7f7",
+    fontWeight: 800,
+  },
+
+  phoneInput: {
+    width: "100%",
+    boxSizing: "border-box",
+    border: "1px solid #ddd",
+    borderRadius: 12,
+    padding: "13px",
+    outline: "none",
+    fontSize: 16,
+    fontFamily: "inherit",
   },
 
   authInput: {
@@ -1533,7 +1551,7 @@ const styles: Record<string, CSSProperties> = {
     padding: "13px",
     marginBottom: 11,
     outline: "none",
-    fontSize: 15,
+    fontSize: 16,
     fontFamily: "inherit",
   },
 
@@ -1549,6 +1567,32 @@ const styles: Record<string, CSSProperties> = {
     cursor: "pointer",
   },
 
+  secondaryAuthButton: {
+    width: "100%",
+    marginTop: 9,
+    border: "1px solid #ddd",
+    background: "#fff",
+    color: "#171717",
+    borderRadius: 12,
+    padding: "12px",
+    fontWeight: 800,
+    fontSize: 14,
+    cursor: "pointer",
+  },
+
+  resendButton: {
+    width: "100%",
+    marginTop: 9,
+    border: "none",
+    background: "transparent",
+    color: "#555",
+    borderRadius: 12,
+    padding: "9px",
+    fontWeight: 700,
+    fontSize: 13,
+    cursor: "pointer",
+  },
+
   authMessage: {
     background: "#fff8cf",
     borderRadius: 12,
@@ -1556,13 +1600,6 @@ const styles: Record<string, CSSProperties> = {
     marginBottom: 12,
     fontSize: 13,
     lineHeight: 1.4,
-  },
-
-  authHint: {
-    textAlign: "center",
-    color: "#777",
-    fontSize: 12,
-    margin: "13px 0 0",
   },
 
   logoutButton: {
