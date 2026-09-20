@@ -1,4 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
 type Service = {
   id: number;
@@ -7,6 +14,15 @@ type Service = {
   location: string;
   icon: string;
   description: string;
+};
+
+type RequestItem = {
+  id: string;
+  need: string;
+  category: string | null;
+  location: string | null;
+  status: string;
+  created_at: string;
 };
 
 const services: Service[] = [
@@ -73,31 +89,143 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("Sab");
   const [message, setMessage] = useState("");
+  const [activeTab, setActiveTab] = useState("home");
+  const [requests, setRequests] = useState<RequestItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadingRequests, setLoadingRequests] = useState(false);
 
   const filteredServices = useMemo(() => {
     return services.filter((service) => {
       const matchesCategory =
         category === "Sab" || service.category === category;
 
-      const text = `${service.title} ${service.description} ${service.category}`
-        .toLowerCase();
+      const text =
+        `${service.title} ${service.description} ${service.category}`.toLowerCase();
 
       const matchesSearch =
-        search.trim() === "" || text.includes(search.toLowerCase());
+        search.trim() === "" ||
+        text.includes(search.toLowerCase());
 
       return matchesCategory && matchesSearch;
     });
   }, [search, category]);
 
-  const askJugaad = () => {
+  const loadRequests = async () => {
+    setLoadingRequests(true);
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setRequests([]);
+      setLoadingRequests(false);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("requests")
+      .select(
+        "id, need, category, location, status, created_at"
+      )
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false });
+
+    if (!error && data) {
+      setRequests(data);
+    }
+
+    setLoadingRequests(false);
+  };
+
+  useEffect(() => {
+    loadRequests();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(() => {
+      loadRequests();
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const askJugaad = async () => {
     if (!message.trim()) {
       alert("Pehle apni zarurat likhiye.");
       return;
     }
 
+    setLoading(true);
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setLoading(false);
+      alert(
+        "Request bhejne ke liye pehle JUGAAD account mein login karna hoga."
+      );
+      setActiveTab("profile");
+      return;
+    }
+
+    const { error } = await supabase.from("requests").insert({
+      user_id: user.id,
+      need: message.trim(),
+      category: category === "Sab" ? null : category,
+      location: "Lucknow",
+      status: "pending",
+    });
+
+    setLoading(false);
+
+    if (error) {
+      alert("Request save nahi hui:\n\n" + error.message);
+      return;
+    }
+
+    setMessage("");
+    await loadRequests();
+    setActiveTab("requests");
+
     alert(
-      `JUGAAD aapki zarurat samajh raha hai:\n\n"${message}"\n\nRelevant person/service dhoonda jayega.`
+      "✅ JUGAAD request submit ho gayi!\n\nAb relevant person/service dhoondi jayegi."
     );
+  };
+
+  const connectService = async (service: Service) => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      alert(
+        "Service se connect karne ke liye pehle JUGAAD account mein login karein."
+      );
+      setActiveTab("profile");
+      return;
+    }
+
+    setMessage(`${service.title} ki zarurat hai - ${service.description}`);
+    setCategory(service.category);
+    setActiveTab("home");
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  };
+
+  const statusText = (status: string) => {
+    if (status === "pending") return "Pending";
+    if (status === "accepted") return "Accepted";
+    if (status === "completed") return "Completed";
+    if (status === "cancelled") return "Cancelled";
+    return status;
   };
 
   return (
@@ -105,7 +233,9 @@ export default function App() {
       <header style={styles.header}>
         <div>
           <div style={styles.logo}>JUGAAD</div>
-          <div style={styles.tagline}>Har zarurat ka jugaad 🇮🇳</div>
+          <div style={styles.tagline}>
+            Har zarurat ka jugaad 🇮🇳
+          </div>
         </div>
 
         <button style={styles.locationButton}>
@@ -114,146 +244,404 @@ export default function App() {
       </header>
 
       <main style={styles.container}>
-        <section style={styles.hero}>
-          <div style={styles.heroBadge}>🇮🇳 JUGAAD INDIA</div>
+        {activeTab === "home" && (
+          <>
+            <section style={styles.hero}>
+              <div style={styles.heroBadge}>
+                🇮🇳 JUGAAD INDIA
+              </div>
 
-          <h1 style={styles.heroTitle}>
-            Jo chahiye, <span style={styles.highlight}>JUGAAD</span> se
-            milega.
-          </h1>
+              <h1 style={styles.heroTitle}>
+                Jo chahiye,{" "}
+                <span style={styles.highlight}>JUGAAD</span>{" "}
+                se milega.
+              </h1>
 
-          <p style={styles.heroText}>
-            Apni zarurat apne words mein batao. JUGAAD aapko sahi
-            person, service ya resource se connect karega.
-          </p>
-
-          <div style={styles.needBox}>
-            <textarea
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              placeholder="Aapko kis cheez ki zarurat hai?"
-              style={styles.textarea}
-            />
-
-            <div style={styles.actionRow}>
-              <button
-                style={styles.smallButton}
-                onClick={() => alert("Voice feature next step mein connect hoga.")}
-              >
-                🎙️ Voice
-              </button>
-
-              <button
-                style={styles.smallButton}
-                onClick={() => alert("Photo feature next step mein connect hoga.")}
-              >
-                📷 Photo
-              </button>
-
-              <button style={styles.jugaadButton} onClick={askJugaad}>
-                JUGAAD Karo →
-              </button>
-            </div>
-          </div>
-        </section>
-
-        <section style={styles.section}>
-          <h2 style={styles.sectionTitle}>Kya chahiye?</h2>
-
-          <div style={styles.categories}>
-            {categories.map((item) => (
-              <button
-                key={item}
-                onClick={() => setCategory(item)}
-                style={{
-                  ...styles.categoryButton,
-                  ...(category === item
-                    ? styles.categoryActive
-                    : {}),
-                }}
-              >
-                {item}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section style={styles.section}>
-          <div style={styles.sectionHeader}>
-            <div>
-              <h2 style={styles.sectionTitle}>Aas-paas ki services</h2>
-              <p style={styles.muted}>
-                Aapki zarurat ke liye available help
+              <p style={styles.heroText}>
+                Apni zarurat apne words mein batao. JUGAAD
+                aapko sahi person, service ya resource se
+                connect karega.
               </p>
-            </div>
-          </div>
 
-          <div style={styles.searchBox}>
-            🔎
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Service ya kaam search karein..."
-              style={styles.searchInput}
-            />
-          </div>
+              <div style={styles.needBox}>
+                <textarea
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  placeholder="Aapko kis cheez ki zarurat hai?"
+                  style={styles.textarea}
+                />
 
-          <div style={styles.grid}>
-            {filteredServices.map((service) => (
-              <div key={service.id} style={styles.card}>
-                <div style={styles.cardIcon}>{service.icon}</div>
-
-                <div style={styles.cardContent}>
-                  <h3 style={styles.cardTitle}>{service.title}</h3>
-
-                  <p style={styles.cardDescription}>
-                    {service.description}
-                  </p>
-
-                  <div style={styles.cardLocation}>
-                    📍 {service.location}
-                  </div>
-
+                <div style={styles.actionRow}>
                   <button
-                    style={styles.connectButton}
+                    style={styles.smallButton}
                     onClick={() =>
                       alert(
-                        `${service.title} ke liye connection request start hogi.`
+                        "🎙️ Voice input next stage mein connect hoga."
                       )
                     }
                   >
-                    Connect →
+                    🎙️ Voice
+                  </button>
+
+                  <button
+                    style={styles.smallButton}
+                    onClick={() =>
+                      alert(
+                        "📷 Photo input next stage mein connect hoga."
+                      )
+                    }
+                  >
+                    📷 Photo
+                  </button>
+
+                  <button
+                    style={{
+                      ...styles.jugaadButton,
+                      opacity: loading ? 0.6 : 1,
+                    }}
+                    onClick={askJugaad}
+                    disabled={loading}
+                  >
+                    {loading
+                      ? "Saving..."
+                      : "JUGAAD Karo →"}
                   </button>
                 </div>
               </div>
-            ))}
-          </div>
+            </section>
 
-          {filteredServices.length === 0 && (
-            <div style={styles.empty}>
-              <div style={styles.emptyIcon}>🔎</div>
-              <h3>Service nahi mili?</h3>
-              <p>
-                Upar apni zarurat JUGAAD ko batao. Fixed category ki
-                zarurat nahi hai.
+            <section style={styles.section}>
+              <h2 style={styles.sectionTitle}>
+                Kya chahiye?
+              </h2>
+
+              <div style={styles.categories}>
+                {categories.map((item) => (
+                  <button
+                    key={item}
+                    onClick={() => setCategory(item)}
+                    style={{
+                      ...styles.categoryButton,
+                      ...(category === item
+                        ? styles.categoryActive
+                        : {}),
+                    }}
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section style={styles.section}>
+              <h2 style={styles.sectionTitle}>
+                Aas-paas ki services
+              </h2>
+
+              <p style={styles.muted}>
+                Aapki zarurat ke liye available help
               </p>
+
+              <div style={styles.searchBox}>
+                🔎
+                <input
+                  value={search}
+                  onChange={(e) =>
+                    setSearch(e.target.value)
+                  }
+                  placeholder="Service ya kaam search karein..."
+                  style={styles.searchInput}
+                />
+              </div>
+
+              <div style={styles.grid}>
+                {filteredServices.map((service) => (
+                  <div
+                    key={service.id}
+                    style={styles.card}
+                  >
+                    <div style={styles.cardIcon}>
+                      {service.icon}
+                    </div>
+
+                    <div style={styles.cardContent}>
+                      <h3 style={styles.cardTitle}>
+                        {service.title}
+                      </h3>
+
+                      <p style={styles.cardDescription}>
+                        {service.description}
+                      </p>
+
+                      <div style={styles.cardLocation}>
+                        📍 {service.location}
+                      </div>
+
+                      <button
+                        style={styles.connectButton}
+                        onClick={() =>
+                          connectService(service)
+                        }
+                      >
+                        Connect →
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {filteredServices.length === 0 && (
+                <div style={styles.empty}>
+                  <div style={styles.emptyIcon}>
+                    🔎
+                  </div>
+                  <h3>Service nahi mili?</h3>
+                  <p>
+                    Upar apni zarurat JUGAAD ko batao.
+                    Fixed category ki zarurat nahi hai.
+                  </p>
+                </div>
+              )}
+            </section>
+          </>
+        )}
+
+        {activeTab === "requests" && (
+          <section style={styles.requestsPage}>
+            <h1 style={styles.pageTitle}>
+              📋 Meri Requests
+            </h1>
+
+            <p style={styles.muted}>
+              Aapki JUGAAD requests yahan dikhengi.
+            </p>
+
+            {loadingRequests ? (
+              <div style={styles.empty}>
+                Requests load ho rahi hain...
+              </div>
+            ) : requests.length === 0 ? (
+              <div style={styles.empty}>
+                <div style={styles.emptyIcon}>
+                  📋
+                </div>
+                <h3>Abhi koi request nahi hai</h3>
+                <p>
+                  Apni zarurat batane ke liye JUGAAD
+                  Karo button use karein.
+                </p>
+
+                <button
+                  style={styles.primaryButton}
+                  onClick={() => setActiveTab("home")}
+                >
+                  JUGAAD Karo →
+                </button>
+              </div>
+            ) : (
+              <div style={styles.requestList}>
+                {requests.map((request) => (
+                  <div
+                    key={request.id}
+                    style={styles.requestCard}
+                  >
+                    <div style={styles.requestTop}>
+                      <span style={styles.requestIcon}>
+                        🧩
+                      </span>
+
+                      <span
+                        style={{
+                          ...styles.status,
+                          background:
+                            request.status ===
+                            "accepted"
+                              ? "#d9f7df"
+                              : request.status ===
+                                "completed"
+                              ? "#d7ecff"
+                              : "#fff1b8",
+                        }}
+                      >
+                        {statusText(request.status)}
+                      </span>
+                    </div>
+
+                    <h3 style={styles.requestTitle}>
+                      {request.need}
+                    </h3>
+
+                    <div style={styles.requestMeta}>
+                      📍 {request.location || "India"}
+                    </div>
+
+                    {request.category && (
+                      <div style={styles.requestMeta}>
+                        🏷️ {request.category}
+                      </div>
+                    )}
+
+                    <div style={styles.requestDate}>
+                      {new Date(
+                        request.created_at
+                      ).toLocaleString("en-IN")}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {activeTab === "profile" && (
+          <section style={styles.profilePage}>
+            <div style={styles.profileIcon}>👤</div>
+
+            <h1 style={styles.pageTitle}>
+              JUGAAD Profile
+            </h1>
+
+            <p style={styles.muted}>
+              Account information
+            </p>
+
+            <ProfileInfo />
+          </section>
+        )}
+
+        {activeTab === "explore" && (
+          <section style={styles.requestsPage}>
+            <h1 style={styles.pageTitle}>
+              🔎 Explore JUGAAD
+            </h1>
+
+            <p style={styles.muted}>
+              Kisi bhi service ya help ko search karein.
+            </p>
+
+            <div style={styles.exploreBox}>
+              <div style={styles.bigEmoji}>🧩</div>
+              <h2>Har zarurat ka JUGAAD</h2>
+              <p>
+                Electrician, plumber, repair, delivery,
+                cleaning, business help ya koi bhi
+                legitimate real-world service.
+              </p>
+
+              <button
+                style={styles.primaryButton}
+                onClick={() => setActiveTab("home")}
+              >
+                Apni Zarurat Batao →
+              </button>
             </div>
-          )}
-        </section>
+          </section>
+        )}
       </main>
 
       <nav style={styles.bottomNav}>
-        <button style={styles.navItemActive}>🏠<span>Home</span></button>
-        <button style={styles.navItem}>🔎<span>Explore</span></button>
-        <button style={styles.navJugaad}>+</button>
-        <button style={styles.navItem}>📋<span>Requests</span></button>
-        <button style={styles.navItem}>👤<span>Profile</span></button>
+        <button
+          style={
+            activeTab === "home"
+              ? styles.navItemActive
+              : styles.navItem
+          }
+          onClick={() => setActiveTab("home")}
+        >
+          🏠
+          <span>Home</span>
+        </button>
+
+        <button
+          style={
+            activeTab === "explore"
+              ? styles.navItemActive
+              : styles.navItem
+          }
+          onClick={() => setActiveTab("explore")}
+        >
+          🔎
+          <span>Explore</span>
+        </button>
+
+        <button
+          style={styles.navJugaad}
+          onClick={() => {
+            setActiveTab("home");
+            setTimeout(() => {
+              window.scrollTo({
+                top: 0,
+                behavior: "smooth",
+              });
+            }, 50);
+          }}
+        >
+          +
+        </button>
+
+        <button
+          style={
+            activeTab === "requests"
+              ? styles.navItemActive
+              : styles.navItem
+          }
+          onClick={() => {
+            setActiveTab("requests");
+            loadRequests();
+          }}
+        >
+          📋
+          <span>Requests</span>
+        </button>
+
+        <button
+          style={
+            activeTab === "profile"
+              ? styles.navItemActive
+              : styles.navItem
+          }
+          onClick={() => setActiveTab("profile")}
+        >
+          👤
+          <span>Profile</span>
+        </button>
       </nav>
     </div>
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
+function ProfileInfo() {
+  const [email, setEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      setEmail(data.user?.email ?? null);
+    });
+  }, []);
+
+  return (
+    <div style={styles.profileCard}>
+      <div style={styles.profileRow}>
+        <span>Account</span>
+        <strong>
+          {email || "Login required"}
+        </strong>
+      </div>
+
+      <div style={styles.profileRow}>
+        <span>Location</span>
+        <strong>📍 Lucknow</strong>
+      </div>
+
+      <div style={styles.profileRow}>
+        <span>Platform</span>
+        <strong>JUGAAD India</strong>
+      </div>
+    </div>
+  );
+}
+
+const styles: Record<string, CSSProperties> = {
   page: {
     minHeight: "100vh",
     background: "#fffdf7",
@@ -418,12 +806,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderColor: "#171717",
   },
 
-  sectionHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-
   searchBox: {
     marginTop: 14,
     background: "#fff",
@@ -445,7 +827,8 @@ const styles: Record<string, React.CSSProperties> = {
 
   grid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+    gridTemplateColumns:
+      "repeat(auto-fit, minmax(260px, 1fr))",
     gap: 14,
     marginTop: 16,
   },
@@ -516,6 +899,121 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 35,
   },
 
+  requestsPage: {
+    paddingTop: 8,
+  },
+
+  pageTitle: {
+    fontSize: 30,
+    fontWeight: 900,
+    margin: "10px 0 5px",
+  },
+
+  requestList: {
+    display: "grid",
+    gap: 14,
+    marginTop: 20,
+  },
+
+  requestCard: {
+    background: "#fff",
+    border: "1px solid #eeeeee",
+    borderRadius: 20,
+    padding: 17,
+  },
+
+  requestTop: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+
+  requestIcon: {
+    fontSize: 26,
+  },
+
+  status: {
+    borderRadius: 20,
+    padding: "6px 10px",
+    fontSize: 12,
+    fontWeight: 800,
+  },
+
+  requestTitle: {
+    fontSize: 17,
+    margin: "13px 0 8px",
+  },
+
+  requestMeta: {
+    color: "#666",
+    fontSize: 13,
+    marginTop: 5,
+  },
+
+  requestDate: {
+    color: "#999",
+    fontSize: 11,
+    marginTop: 12,
+  },
+
+  primaryButton: {
+    marginTop: 15,
+    border: "none",
+    background: "#171717",
+    color: "#fff",
+    borderRadius: 12,
+    padding: "12px 18px",
+    fontWeight: 800,
+    cursor: "pointer",
+  },
+
+  profilePage: {
+    paddingTop: 20,
+    textAlign: "center",
+  },
+
+  profileIcon: {
+    width: 80,
+    height: 80,
+    borderRadius: "50%",
+    background: "#ffdd00",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 36,
+    margin: "0 auto 15px",
+  },
+
+  profileCard: {
+    background: "#fff",
+    borderRadius: 20,
+    border: "1px solid #eee",
+    marginTop: 25,
+    overflow: "hidden",
+    textAlign: "left",
+  },
+
+  profileRow: {
+    padding: 16,
+    borderBottom: "1px solid #eee",
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 15,
+    fontSize: 14,
+  },
+
+  exploreBox: {
+    background: "#ffdd00",
+    borderRadius: 24,
+    padding: 25,
+    marginTop: 25,
+    textAlign: "center",
+  },
+
+  bigEmoji: {
+    fontSize: 55,
+  },
+
   bottomNav: {
     position: "fixed",
     bottom: 0,
@@ -539,6 +1037,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     color: "#777",
     fontSize: 11,
+    cursor: "pointer",
   },
 
   navItemActive: {
@@ -551,6 +1050,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#171717",
     fontSize: 11,
     fontWeight: 800,
+    cursor: "pointer",
   },
 
   navJugaad: {
@@ -563,5 +1063,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 900,
     marginTop: -25,
     boxShadow: "0 4px 15px rgba(0,0,0,0.18)",
+    cursor: "pointer",
   },
 };
