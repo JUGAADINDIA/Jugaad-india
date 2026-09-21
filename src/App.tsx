@@ -21,11 +21,20 @@ type Service = {
 
 type RequestItem = {
   id: string;
-  need: string;
+  customer_id: string;
+  title: string;
+  description: string | null;
+  input_type: string | null;
   category: string | null;
+  budget: number | null;
   location: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  required_at: string | null;
+  target_at: string | null;
   status: string;
   created_at: string;
+  updated_at: string;
 };
 
 const services: Service[] = [
@@ -83,7 +92,8 @@ const services: Service[] = [
     category: "Digital",
     location: "Lucknow",
     icon: "💻",
-    description: "Online form, document, app aur digital kaam mein help",
+    description:
+      "Online form, document, app aur digital kaam mein help",
   },
   {
     id: 8,
@@ -91,7 +101,8 @@ const services: Service[] = [
     category: "Education",
     location: "Lucknow",
     icon: "📚",
-    description: "Study, tuition, assignment aur learning help",
+    description:
+      "Study, tuition, assignment aur learning help",
   },
   {
     id: 9,
@@ -99,7 +110,8 @@ const services: Service[] = [
     category: "Travel",
     location: "Lucknow",
     icon: "🧳",
-    description: "Travel planning, booking aur local travel help",
+    description:
+      "Travel planning, booking aur local travel help",
   },
   {
     id: 10,
@@ -107,7 +119,8 @@ const services: Service[] = [
     category: "Personal",
     location: "Lucknow",
     icon: "🤝",
-    description: "Daily life ki legitimate personal help",
+    description:
+      "Daily life ki legitimate personal help",
   },
   {
     id: 11,
@@ -115,7 +128,8 @@ const services: Service[] = [
     category: "Business",
     location: "Lucknow",
     icon: "💼",
-    description: "Business, shop, marketing aur professional help",
+    description:
+      "Business, shop, marketing aur professional help",
   },
   {
     id: 12,
@@ -123,7 +137,8 @@ const services: Service[] = [
     category: "Other",
     location: "Lucknow",
     icon: "🧩",
-    description: "Jo service list mein nahi hai, woh bhi batao",
+    description:
+      "Jo service list mein nahi hai, woh bhi batao",
   },
 ];
 
@@ -191,13 +206,32 @@ export default function App() {
     const { data, error } = await supabase
       .from("requests")
       .select(
-        "id, need, category, location, status, created_at"
+        `
+        id,
+        customer_id,
+        title,
+        description,
+        input_type,
+        category,
+        budget,
+        location,
+        latitude,
+        longitude,
+        required_at,
+        target_at,
+        status,
+        created_at,
+        updated_at
+      `
       )
-      .eq("user_id", currentUser.id)
+      .eq("customer_id", currentUser.id)
       .order("created_at", { ascending: false });
 
-    if (!error && data) {
-      setRequests(data);
+    if (error) {
+      console.error("Requests load error:", error);
+      setRequests([]);
+    } else {
+      setRequests(data ?? []);
     }
 
     setLoadingRequests(false);
@@ -395,20 +429,34 @@ export default function App() {
       return;
     }
 
+    const requestTitle =
+      category === "Sab"
+        ? message.trim().slice(0, 100)
+        : category;
+
     const { error } = await supabase
       .from("requests")
       .insert({
-        user_id: currentUser.id,
-        need: message.trim(),
+        customer_id: currentUser.id,
+        title: requestTitle,
+        description: message.trim(),
+        input_type: "text",
         category:
           category === "Sab" ? null : category,
+        budget: null,
         location: "Lucknow",
+        latitude: null,
+        longitude: null,
+        required_at: null,
+        target_at: null,
         status: "pending",
       });
 
     setLoading(false);
 
     if (error) {
+      console.error("Request insert error:", error);
+
       alert(
         "Request save nahi hui:\n\n" +
           error.message
@@ -797,8 +845,18 @@ export default function App() {
                     <h3
                       style={styles.requestTitle}
                     >
-                      {request.need}
+                      {request.title}
                     </h3>
+
+                    {request.description && (
+                      <p
+                        style={
+                          styles.cardDescription
+                        }
+                      >
+                        {request.description}
+                      </p>
+                    )}
 
                     <div
                       style={styles.requestMeta}
