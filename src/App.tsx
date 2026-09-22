@@ -96,9 +96,6 @@ function App() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [authMode, setAuthMode] = useState<"phone" | "otp">("phone");
-  const [phone, setPhone] = useState("");
-  const [otp, setOtp] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
 
@@ -178,39 +175,21 @@ function App() {
     }
   }
 
-  async function sendOtp() {
+  async function signInWithGoogle() {
     setAuthBusy(true);
     setAuthMessage("");
-    const normalized = normalizeIndiaPhone(phone);
-    if (!/^\+91\d{10}$/.test(normalized)) {
-      setAuthMessage("10 digit mobile number dalo.");
-      setAuthBusy(false);
-      return;
-    }
-    const { error } = await supabase.auth.signInWithOtp({ phone: normalized });
-    if (error) setAuthMessage(error.message);
-    else {
-      setAuthMode("otp");
-      setAuthMessage("OTP bhej diya. SMS check karo.");
-    }
-    setAuthBusy(false);
-  }
 
-  async function verifyOtp() {
-    setAuthBusy(true);
-    setAuthMessage("");
-    const normalized = normalizeIndiaPhone(phone);
-    const { data, error } = await supabase.auth.verifyOtp({
-      phone: normalized,
-      token: otp.trim(),
-      type: "sms",
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: window.location.origin,
+      },
     });
-    if (error) setAuthMessage(error.message);
-    else if (data.user) {
-      await loadProfile(data.user.id);
-      setAuthMessage("JUGAAD mein swagat hai! 😎");
+
+    if (error) {
+      setAuthMessage(error.message);
+      setAuthBusy(false);
     }
-    setAuthBusy(false);
   }
 
   async function logout() {
@@ -449,39 +428,13 @@ function App() {
           <h1>Jo chahiye, JUGAAD se milega.</h1>
           <p className="muted">Voice, photo ya text mein batao. Baaki jugaad hum dekh lenge 😎</p>
 
-          {authMode === "phone" ? (
-            <>
-              <label>Mobile Number</label>
-              <input
-                inputMode="numeric"
-                value={phone}
-                onChange={e => setPhone(e.target.value.replace(/\D/g, "").slice(-10))}
-                placeholder="10 digit mobile number"
-              />
-              <button className="primary big" disabled={authBusy} onClick={sendOtp}>
-                {authBusy ? "OTP aa raha hai..." : "OTP Bhejo →"}
-              </button>
-            </>
-          ) : (
-            <>
-              <label>OTP</label>
-              <input
-                inputMode="numeric"
-                value={otp}
-                onChange={e => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                placeholder="6 digit OTP"
-              />
-              <button className="primary big" disabled={authBusy} onClick={verifyOtp}>
-                {authBusy ? "Check ho raha..." : "JUGAAD Karo →"}
-              </button>
-              <button className="link-btn" onClick={() => { setAuthMode("phone"); setOtp(""); }}>
-                Number badlo
-              </button>
-            </>
-          )}
+          <button className="google-btn big" disabled={authBusy} onClick={signInWithGoogle}>
+            <span className="google-icon">G</span>
+            {authBusy ? "Google khul raha hai..." : "Google se Login →"}
+          </button>
 
           {authMessage && <div className="message">{authMessage}</div>}
-          <div className="auth-note">OTP ke liye Supabase Auth mein Phone provider/SMS provider configured hona zaroori hai.</div>
+          <div className="auth-note">Gmail/Google account se secure login. SMS OTP ki zarurat nahi.</div>
         </div>
       </div>
     );
