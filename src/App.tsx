@@ -69,20 +69,15 @@ type PaymentRow = {
   customer_id?: string | null;
   provider_id?: string | null;
   amount: number;
-  platform_fee: number;
-  provider_amount: number;
+  platform_fee?: number | null;
+  provider_amount?: number | null;
   payment_method?: string | null;
-  payment_gateway?: string | null;
   transaction_id?: string | null;
-  payment_status: string;
-  refund_status: string;
-  refund_amount: number;
-  payout_status: string;
-  paid_at?: string | null;
-  refunded_at?: string | null;
-  payout_at?: string | null;
+  payment_status?: string | null;
+  payment_proof_url?: string | null;
   notes?: string | null;
-  created_at: string;
+  created_at?: string | null;
+  paid_at?: string | null;
   updated_at?: string | null;
 };
 
@@ -104,45 +99,37 @@ const categories = [
 ];
 
 const services = [
-  "Electrician",
-  "Plumber",
-  "Mobile Repair",
-  "AC/Cooler Repair",
-  "Home Cleaning",
-  "Delivery Help",
+  { name: "Electrician", icon: "⚡", category: "Repair" },
+  { name: "Plumber", icon: "🔧", category: "Home" },
+  { name: "Mobile Repair", icon: "📱", category: "Repair" },
+  { name: "AC/Cooler Repair", icon: "❄️", category: "Repair" },
+  { name: "Home Cleaning", icon: "🧹", category: "Home" },
+  { name: "Delivery Help", icon: "🛵", category: "Delivery" },
 ];
 
-function formatDate(value?: string | null) {
-  if (!value) return "";
-
-  return new Date(value).toLocaleString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function money(value?: number | null) {
-  return `₹${Number(value || 0).toLocaleString("en-IN")}`;
-}
-
-function shortId(value?: string | null) {
+const formatDate = (value?: string | null) => {
   if (!value) return "—";
-  return value.length > 12
-    ? `${value.slice(0, 8)}...${value.slice(-4)}`
-    : value;
-}
 
-function statusLabel(status?: string | null) {
+  try {
+    return new Date(value).toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "—";
+  }
+};
+
+const statusLabel = (status?: string | null) => {
   switch (status) {
     case "pending":
       return "⏳ Pending";
     case "accepted":
       return "🤝 Accepted";
     case "in_progress":
-      return "🚗 Kaam chal raha";
+      return "🛠️ In Progress";
     case "completed":
       return "✅ Completed";
     case "cancelled":
@@ -150,45 +137,24 @@ function statusLabel(status?: string | null) {
     default:
       return status || "Unknown";
   }
-}
+};
 
-function paymentStatusLabel(status?: string | null) {
+const paymentLabel = (status?: string | null) => {
   switch (status) {
-    case "paid":
-      return "✅ Paid";
-    case "processing":
-      return "🔄 Processing";
     case "pending":
       return "⏳ Pending";
+    case "paid":
+      return "✅ Paid";
     case "failed":
       return "❌ Failed";
-    case "cancelled":
-      return "🚫 Cancelled";
     case "refunded":
       return "↩️ Refunded";
-    case "partially_refunded":
-      return "↩️ Partial Refund";
+    case "cancelled":
+      return "🚫 Cancelled";
     default:
-      return status || "Unknown";
+      return status || "Pending";
   }
-}
-
-function roleLabel(role?: string | null) {
-  switch (String(role || "").toLowerCase()) {
-    case "admin":
-      return "👑 Admin";
-    case "provider":
-      return "🧰 Provider";
-    case "worker":
-      return "🧰 Worker";
-    case "student":
-      return "🎓 Student";
-    case "government":
-      return "🏛️ Government";
-    default:
-      return "🧑 Customer";
-  }
-}
+};
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -204,7 +170,7 @@ export default function App() {
   const [requests, setRequests] = useState<RequestRow[]>([]);
   const [matches, setMatches] = useState<MatchRow[]>([]);
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
-  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [users, setUsers] = useState<Profile[]>([]);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
 
   const [showNotifications, setShowNotifications] = useState(false);
@@ -215,15 +181,18 @@ export default function App() {
   const [profileAddress, setProfileAddress] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
 
-  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminSection, setAdminSection] = useState("dashboard");
   const [adminSearch, setAdminSearch] = useState("");
-  const [adminFilter, setAdminFilter] = useState("all");
-  const [selectedRequest, setSelectedRequest] =
-    useState<RequestRow | null>(null);
-  const [selectedMatch, setSelectedMatch] =
-    useState<MatchRow | null>(null);
-  const [selectedPayment, setSelectedPayment] =
-    useState<PaymentRow | null>(null);
+  const [requestFilter, setRequestFilter] = useState("all");
+  const [paymentFilter, setPaymentFilter] = useState("all");
+
+  const [paymentFormOpen, setPaymentFormOpen] = useState(false);
+  const [paymentRequestId, setPaymentRequestId] = useState("");
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("UPI");
+  const [paymentTransactionId, setPaymentTransactionId] = useState("");
+  const [paymentNotes, setPaymentNotes] = useState("");
+  const [savingPayment, setSavingPayment] = useState(false);
 
   const role = String(profile?.role || "customer").toLowerCase();
 
@@ -236,38 +205,49 @@ export default function App() {
     role === "worker" ||
     role === "service_provider";
 
-  const unreadCount =
-    notifications.filter((n) => !n.is_read).length;
+  const unreadCount = notifications.filter(
+    (n) => !n.is_read
+  ).length;
 
   useEffect(() => {
+    let mounted = true;
+
+    const init = async () => {
+      setLoading(true);
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (mounted) {
+        setUser(session?.user || null);
+      }
+
+      setLoading(false);
+    };
+
     init();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user || null);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setProfile(null);
+      return;
+    }
 
     loadProfile(user.id);
     loadNotifications(user.id);
-
-    const notificationChannel = supabase
-      .channel(`notifications-${user.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "notifications",
-          filter: `user_id=eq.${user.id}`,
-        },
-        () => {
-          loadNotifications(user.id);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(notificationChannel);
-    };
   }, [user]);
 
   useEffect(() => {
@@ -279,121 +259,28 @@ export default function App() {
       loadRequests();
       loadMatches();
     }
-  }, [user, profile]);
-
-  useEffect(() => {
-    if (!user || !profile || !isAdmin) return;
-
-    const requestsChannel = supabase
-      .channel("admin-requests-live")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "requests",
-        },
-        () => {
-          loadAdminData();
-        }
-      )
-      .subscribe();
-
-    const matchesChannel = supabase
-      .channel("admin-matches-live")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "matches",
-        },
-        () => {
-          loadAdminData();
-        }
-      )
-      .subscribe();
-
-    const paymentsChannel = supabase
-      .channel("admin-payments-live")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "payments",
-        },
-        () => {
-          loadAdminData();
-        }
-      )
-      .subscribe();
-
-    const profilesChannel = supabase
-      .channel("admin-profiles-live")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "profiles",
-        },
-        () => {
-          loadAdminData();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(requestsChannel);
-      supabase.removeChannel(matchesChannel);
-      supabase.removeChannel(paymentsChannel);
-      supabase.removeChannel(profilesChannel);
-    };
   }, [user, profile, isAdmin]);
 
-  async function init() {
-    setLoading(true);
+  useEffect(() => {
+    if (!user) return;
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    const timer = window.setInterval(() => {
+      loadNotifications(user.id);
 
-    setUser(session?.user ?? null);
-    setLoading(false);
+      if (profile) {
+        if (isAdmin) {
+          loadAdminData();
+        } else {
+          loadRequests();
+          loadMatches();
+        }
+      }
+    }, 15000);
 
-    supabase.auth.onAuthStateChange((_event, newSession) => {
-      setUser(newSession?.user ?? null);
-    });
-  }
+    return () => window.clearInterval(timer);
+  }, [user, profile, isAdmin]);
 
-  async function login() {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: window.location.origin,
-      },
-    });
-
-    if (error) {
-      setMessage(error.message);
-    }
-  }
-
-  async function logout() {
-    await supabase.auth.signOut();
-
-    setUser(null);
-    setProfile(null);
-    setRequests([]);
-    setMatches([]);
-    setNotifications([]);
-    setProfiles([]);
-    setPayments([]);
-    setTab("home");
-  }
-
-  async function loadProfile(userId: string) {
+  const loadProfile = async (userId: string) => {
     const { data, error } = await supabase
       .from("profiles")
       .select("*")
@@ -405,15 +292,16 @@ export default function App() {
       return;
     }
 
-    setProfile(data);
+    if (data) {
+      setProfile(data as Profile);
+      setProfileName(data.full_name || "");
+      setProfilePhone(data.phone || "");
+      setProfileAddress(data.preferred_address || "");
+    }
+  };
 
-    setProfileName(data?.full_name || "");
-    setProfilePhone(data?.phone || "");
-    setProfileAddress(data?.preferred_address || "");
-  }
-
-  async function loadRequests() {
-    if (!user || !profile) return;
+  const loadRequests = async () => {
+    if (!user) return;
 
     let query = supabase
       .from("requests")
@@ -432,145 +320,116 @@ export default function App() {
     const { data, error } = await query;
 
     if (error) {
-      console.error(error);
-      setMessage(error.message);
+      console.error("requests:", error);
       return;
     }
 
-    const sorted = (data || []).sort((a, b) => {
-      const ad = new Date(
-        a.created_at || a.create_at || 0
-      ).getTime();
-
-      const bd = new Date(
-        b.created_at || b.create_at || 0
-      ).getTime();
-
-      return bd - ad;
-    });
+    const sorted = ((data || []) as RequestRow[]).sort(
+      (a, b) =>
+        new Date(
+          b.created_at || b.create_at || 0
+        ).getTime() -
+        new Date(
+          a.created_at || a.create_at || 0
+        ).getTime()
+    );
 
     setRequests(sorted);
-  }
+  };
 
-  async function loadMatches() {
+  const loadMatches = async () => {
     if (!user) return;
 
-    const { data, error } = await supabase
+    let query = supabase
       .from("matches")
-      .select("*")
-      .order("created_at", {
-        ascending: false,
-      });
+      .select("*");
+
+    if (!isAdmin) {
+      if (isProvider) {
+        query = query.or(
+          `provider_id.eq.${user.id},worker_id.eq.${user.id}`
+        );
+      }
+    }
+
+    const { data, error } = await query;
 
     if (error) {
-      console.error(error);
+      console.error("matches:", error);
       return;
     }
 
-    setMatches(data || []);
-  }
+    setMatches((data || []) as MatchRow[]);
+  };
 
-  async function loadNotifications(userId: string) {
+  const loadNotifications = async (userId: string) => {
     const { data, error } = await supabase
       .from("notifications")
       .select("*")
       .eq("user_id", userId)
-      .order("created_at", {
-        ascending: false,
-      });
+      .order("created_at", { ascending: false })
+      .limit(100);
 
     if (error) {
-      console.error(error);
+      console.error("notifications:", error);
       return;
     }
 
-    setNotifications(data || []);
-  }
+    setNotifications((data || []) as NotificationRow[]);
+  };
 
-  async function loadAdminData() {
-    if (!user || !isAdmin) return;
+  const loadUsers = async () => {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-    setAdminLoading(true);
+    if (error) {
+      console.error("users:", error);
+      return;
+    }
 
-    const [
-      requestResult,
-      matchResult,
-      profileResult,
-      paymentResult,
-    ] = await Promise.all([
-      supabase
-        .from("requests")
-        .select("*")
-        .order("created_at", {
-          ascending: false,
-        }),
+    setUsers((data || []) as Profile[]);
+  };
 
-      supabase
-        .from("matches")
-        .select("*")
-        .order("created_at", {
-          ascending: false,
-        }),
+  const loadPayments = async () => {
+    const { data, error } = await supabase
+      .from("payments")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-      supabase
-        .from("profiles")
-        .select("*")
-        .order("created_at", {
-          ascending: false,
-        }),
+    if (error) {
+      console.error("payments:", error);
+      setPayments([]);
+      return;
+    }
 
-      supabase
-        .from("payments")
-        .select("*")
-        .order("created_at", {
-          ascending: false,
-        }),
+    setPayments((data || []) as PaymentRow[]);
+  };
+
+  const loadAdminData = async () => {
+    await Promise.all([
+      loadRequests(),
+      loadMatches(),
+      loadUsers(),
+      loadPayments(),
     ]);
+  };
 
-    if (requestResult.error) {
-      console.error(requestResult.error);
-    } else {
-      setRequests(requestResult.data || []);
-    }
-
-    if (matchResult.error) {
-      console.error(matchResult.error);
-    } else {
-      setMatches(matchResult.data || []);
-    }
-
-    if (profileResult.error) {
-      console.error(profileResult.error);
-    } else {
-      setProfiles(profileResult.data || []);
-    }
-
-    if (paymentResult.error) {
-      console.error(paymentResult.error);
-    } else {
-      setPayments(paymentResult.data || []);
-    }
-
-    setAdminLoading(false);
-  }
-
-  async function createRequest() {
+  const createRequest = async () => {
     if (!user) {
-      setMessage("Pehle Google se login karo 😄");
+      setMessage("🔐 Pehle login karo.");
       return;
     }
 
     const cleanNeed = need.trim();
 
     if (!cleanNeed) {
-      setMessage(
-        "Bhai, pehle batao kya jugaad chahiye 😄"
-      );
+      setMessage("😎 Bhai, kaam to batao!");
       return;
     }
 
     setSavingRequest(true);
-    setMessage("");
 
     const { error } = await supabase
       .from("requests")
@@ -592,41 +451,49 @@ export default function App() {
 
     if (error) {
       console.error(error);
-      setMessage(error.message);
+      setMessage(
+        `❌ Request save nahi hui: ${error.message}`
+      );
       return;
     }
 
     setNeed("");
     setLocation("");
-    setCategory("Sab");
-
     setMessage(
-      "🎉 JUGAAD nikal pada! Kaam dhoondh raha hai."
+      "🎉 JUGAAD lag gaya! Kaam dhoondh rahe hain."
     );
 
     await loadRequests();
     setTab("requests");
-  }
+  };
 
-  async function acceptRequest(
+  const useService = (serviceName: string) => {
+    setNeed(
+      `Mujhe ${serviceName.toLowerCase()} chahiye`
+    );
+    setCategory(
+      services.find(
+        (s) => s.name === serviceName
+      )?.category || "Sab"
+    );
+    setTab("home");
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  };
+
+  const acceptRequest = async (
     requestId: string
-  ) {
-    if (!user) return;
+  ) => {
+    if (!user || !isProvider) return;
 
-    setMessage("");
-
-    const { data: existing, error: matchError } =
-      await supabase
-        .from("matches")
-        .select("id")
-        .eq("request_id", requestId)
-        .eq("provider_id", user.id)
-        .maybeSingle();
-
-    if (matchError) {
-      setMessage(matchError.message);
-      return;
-    }
+    const { data: existing } = await supabase
+      .from("matches")
+      .select("id")
+      .eq("request_id", requestId)
+      .eq("provider_id", user.id)
+      .maybeSingle();
 
     if (!existing) {
       const { error } = await supabase
@@ -636,29 +503,30 @@ export default function App() {
           provider_id: user.id,
           worker_id: user.id,
           status: "accepted",
+          matches_status: "accepted",
         });
 
       if (error) {
         console.error(error);
         setMessage(
-          "Match create nahi hua: " +
-            error.message
+          `❌ Match create nahi hua: ${error.message}`
         );
         return;
       }
     }
 
-    const { error: requestError } =
-      await supabase
-        .from("requests")
-        .update({
-          status: STATUS.accepted,
-          provider_id: user.id,
-        })
-        .eq("id", requestId);
+    const { error } = await supabase
+      .from("requests")
+      .update({
+        status: STATUS.accepted,
+        provider_id: user.id,
+      })
+      .eq("id", requestId);
 
-    if (requestError) {
-      setMessage(requestError.message);
+    if (error) {
+      setMessage(
+        `❌ Request update nahi hui: ${error.message}`
+      );
       return;
     }
 
@@ -668,26 +536,29 @@ export default function App() {
 
     await loadRequests();
     await loadMatches();
-  }
+    await loadNotifications(user.id);
+  };
 
-  async function updateRequestStatus(
+  const updateRequestStatus = async (
     requestId: string,
     status: string
-  ) {
+  ) => {
     const { error } = await supabase
       .from("requests")
       .update({ status })
       .eq("id", requestId);
 
     if (error) {
-      setMessage(error.message);
+      setMessage(
+        `❌ Status update nahi hua: ${error.message}`
+      );
       return;
     }
 
     setMessage(
       status === STATUS.completed
-        ? "🎉 Kaam complete! JUGAAD successful."
-        : "Status update ho gaya 👍"
+        ? "🎉 Kaam complete mark ho gaya!"
+        : `✅ Status: ${statusLabel(status)}`
     );
 
     await loadRequests();
@@ -695,67 +566,19 @@ export default function App() {
     if (isAdmin) {
       await loadAdminData();
     }
-  }
+  };
 
-  async function adminUpdateRequestStatus(
-    requestId: string,
-    status: string
-  ) {
-    const { error } = await supabase
-      .from("requests")
-      .update({ status })
-      .eq("id", requestId);
-
-    if (error) {
-      setMessage(
-        "Request update nahi hua: " +
-          error.message
-      );
-      return;
-    }
-
-    setMessage(
-      `📋 Request ${status} kar di gayi.`
-    );
-
-    await loadAdminData();
-  }
-
-  async function adminUpdateUser(
-    profileId: string,
-    changes: Partial<Profile>
-  ) {
-    const { error } = await supabase
-      .from("profiles")
-      .update(changes)
-      .eq("id", profileId);
-
-    if (error) {
-      setMessage(
-        "User update nahi hua: " +
-          error.message
-      );
-      return;
-    }
-
-    setMessage("👤 User update ho gaya.");
-    await loadAdminData();
-  }
-
-  async function saveProfile() {
+  const saveProfile = async () => {
     if (!user) return;
 
     setSavingProfile(true);
-    setMessage("");
 
     const { error } = await supabase
       .from("profiles")
       .upsert({
         id: user.id,
-        full_name:
-          profileName.trim() || null,
-        phone:
-          profilePhone.trim() || null,
+        full_name: profileName.trim() || null,
+        phone: profilePhone.trim() || null,
         preferred_address:
           profileAddress.trim() || null,
       });
@@ -763,15 +586,20 @@ export default function App() {
     setSavingProfile(false);
 
     if (error) {
-      setMessage(error.message);
+      setMessage(
+        `❌ Profile save nahi hua: ${error.message}`
+      );
       return;
     }
 
     await loadProfile(user.id);
-    setMessage("💾 Profile save ho gaya.");
-  }
 
-  async function switchToProvider() {
+    setMessage(
+      "💾 Profile save ho gaya!"
+    );
+  };
+
+  const switchToProvider = async () => {
     if (!user) return;
 
     const { error } = await supabase
@@ -783,19 +611,20 @@ export default function App() {
       });
 
     if (error) {
-      setMessage(error.message);
+      setMessage(
+        `❌ Provider mode nahi laga: ${error.message}`
+      );
       return;
     }
 
     await loadProfile(user.id);
-    setTab("home");
 
     setMessage(
       "🧰 Provider mode ON! Ab kaam pakdo."
     );
-  }
+  };
 
-  async function switchToCustomer() {
+  const switchToCustomer = async () => {
     if (!user) return;
 
     const { error } = await supabase
@@ -806,160 +635,258 @@ export default function App() {
       });
 
     if (error) {
-      setMessage(error.message);
+      setMessage(
+        `❌ Customer mode nahi laga: ${error.message}`
+      );
       return;
     }
 
     await loadProfile(user.id);
-    setTab("home");
 
-    setMessage("🧑 Customer mode ON!");
-  }
+    setMessage(
+      "🙋 Customer mode ON!"
+    );
+  };
 
-  async function markNotificationRead(
-    id: string
-  ) {
+  const signOut = async () => {
+    await supabase.auth.signOut();
+  };
+
+  const markNotificationRead = async (
+    notificationId: string
+  ) => {
     const { error } = await supabase
       .from("notifications")
-      .update({
-        is_read: true,
-      })
-      .eq("id", id);
+      .update({ is_read: true })
+      .eq("id", notificationId)
+      .eq("user_id", user?.id);
 
-    if (error) {
-      console.error(error);
-      return;
-    }
-
-    if (user) {
+    if (!error && user) {
       await loadNotifications(user.id);
     }
-  }
+  };
 
-  async function markAllNotificationsRead() {
+  const markAllNotificationsRead = async () => {
     if (!user) return;
 
     const { error } = await supabase
       .from("notifications")
-      .update({
-        is_read: true,
-      })
+      .update({ is_read: true })
       .eq("user_id", user.id)
       .eq("is_read", false);
 
+    if (!error) {
+      await loadNotifications(user.id);
+    }
+  };
+
+  const updateUserActive = async (
+    userId: string,
+    active: boolean
+  ) => {
+    const { error } = await supabase
+      .from("profiles")
+      .update({ is_active: active })
+      .eq("id", userId);
+
     if (error) {
-      setMessage(error.message);
+      setMessage(
+        `❌ User update nahi hua: ${error.message}`
+      );
       return;
     }
 
-    await loadNotifications(user.id);
-  }
+    setMessage(
+      active
+        ? "🟢 User active kar diya."
+        : "🔴 User deactivate kar diya."
+    );
 
-  async function adminPaymentStatus(
+    await loadUsers();
+  };
+
+  const updateUserVerified = async (
+    userId: string,
+    verified: boolean
+  ) => {
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        is_verified: verified,
+      })
+      .eq("id", userId);
+
+    if (error) {
+      setMessage(
+        `❌ Verification update nahi hua: ${error.message}`
+      );
+      return;
+    }
+
+    setMessage(
+      verified
+        ? "✅ User verified."
+        : "⚠️ Verification hata di."
+    );
+
+    await loadUsers();
+  };
+
+  const updateUserRole = async (
+    userId: string,
+    newRole: string
+  ) => {
+    if (newRole === "admin") {
+      setMessage(
+        "🔐 Admin role yahan se change nahi kiya ja sakta."
+      );
+      return;
+    }
+
+    const { error } = await supabase
+      .from("profiles")
+      .update({ role: newRole })
+      .eq("id", userId);
+
+    if (error) {
+      setMessage(
+        `❌ Role update nahi hua: ${error.message}`
+      );
+      return;
+    }
+
+    setMessage("👤 User role update ho gaya.");
+    await loadUsers();
+  };
+
+  const updatePaymentStatus = async (
     paymentId: string,
     status: string
-  ) {
-    const { error } = await supabase.rpc(
-      "admin_update_payment_status",
-      {
-        p_payment_id: paymentId,
-        p_status: status,
-        p_notes: null,
-      }
-    );
+  ) => {
+    const values: Record<string, unknown> = {
+      payment_status: status,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (status === "paid") {
+      values.paid_at =
+        new Date().toISOString();
+    }
+
+    const { error } = await supabase
+      .from("payments")
+      .update(values)
+      .eq("id", paymentId);
 
     if (error) {
       setMessage(
-        "Payment update failed: " +
-          error.message
+        `❌ Payment update nahi hua: ${error.message}`
       );
       return;
     }
 
     setMessage(
-      `💳 Payment ${status} kar di gayi.`
+      `💳 Payment ${paymentLabel(status)}`
     );
 
-    setSelectedPayment(null);
-    await loadAdminData();
-  }
+    await loadPayments();
+  };
 
-  async function adminRefund(
-    payment: PaymentRow
-  ) {
-    const amount = window.prompt(
-      `Refund amount enter karo. Maximum ${money(
-        payment.amount
-      )}`,
-      String(payment.amount)
-    );
-
-    if (amount === null) return;
-
-    const refundAmount = Number(amount);
-
-    if (
-      !Number.isFinite(refundAmount) ||
-      refundAmount <= 0 ||
-      refundAmount > Number(payment.amount)
-    ) {
-      setMessage("❌ Invalid refund amount.");
+  const createPayment = async () => {
+    if (!user || !paymentAmount.trim()) {
+      setMessage("💰 Amount bharna zaroori hai.");
       return;
     }
 
-    const { error } = await supabase.rpc(
-      "admin_refund_payment",
-      {
-        p_payment_id: payment.id,
-        p_refund_amount: refundAmount,
-        p_notes: "Admin refund",
-      }
+    const amount = Number(
+      paymentAmount
     );
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setMessage("💰 Valid amount daalo.");
+      return;
+    }
+
+    setSavingPayment(true);
+
+    const selectedRequest =
+      requests.find(
+        (r) => r.id === paymentRequestId
+      );
+
+    let customerId =
+      selectedRequest?.user_id || null;
+
+    let providerId =
+      selectedRequest?.provider_id || null;
+
+    if (paymentRequestId) {
+      const { data: match } =
+        await supabase
+          .from("matches")
+          .select("*")
+          .eq(
+            "request_id",
+            paymentRequestId
+          )
+          .order("created_at", {
+            ascending: false,
+          })
+          .limit(1)
+          .maybeSingle();
+
+      if (match) {
+        providerId =
+          match.provider_id ||
+          match.worker_id ||
+          providerId;
+      }
+    }
+
+    const platformFee = 0;
+    const providerAmount =
+      amount - platformFee;
+
+    const { error } = await supabase
+      .from("payments")
+      .insert({
+        request_id:
+          paymentRequestId || null,
+        customer_id: customerId,
+        provider_id: providerId,
+        amount,
+        platform_fee: platformFee,
+        provider_amount: providerAmount,
+        payment_method: paymentMethod,
+        transaction_id:
+          paymentTransactionId.trim() ||
+          null,
+        payment_status: "pending",
+        notes:
+          paymentNotes.trim() || null,
+      });
+
+    setSavingPayment(false);
 
     if (error) {
       setMessage(
-        "Refund failed: " +
-          error.message
+        `❌ Payment create nahi hua: ${error.message}`
       );
       return;
     }
 
-    setMessage(
-      `↩️ ${money(
-        refundAmount
-      )} refund mark kar diya.`
-    );
-
-    setSelectedPayment(null);
-    await loadAdminData();
-  }
-
-  async function adminPayout(
-    paymentId: string,
-    status: string
-  ) {
-    const { error } = await supabase.rpc(
-      "admin_update_payout",
-      {
-        p_payment_id: paymentId,
-        p_payout_status: status,
-      }
-    );
-
-    if (error) {
-      setMessage(
-        "Payout update failed: " +
-          error.message
-      );
-      return;
-    }
+    setPaymentFormOpen(false);
+    setPaymentRequestId("");
+    setPaymentAmount("");
+    setPaymentTransactionId("");
+    setPaymentNotes("");
 
     setMessage(
-      `💸 Provider payout ${status}.`
+      "💳 Payment query create ho gayi."
     );
 
-    await loadAdminData();
-  }
+    await loadPayments();
+  };
 
   const customerRequests = useMemo(() => {
     if (!user) return [];
@@ -969,213 +896,231 @@ export default function App() {
     );
   }, [requests, user]);
 
-  const providerRequests = useMemo(() => {
-    return requests;
+  const providerRequests = useMemo(
+    () => requests,
+    [requests]
+  );
+
+  const requestMap = useMemo(() => {
+    const map: Record<
+      string,
+      RequestRow
+    > = {};
+
+    requests.forEach((r) => {
+      map[r.id] = r;
+    });
+
+    return map;
   }, [requests]);
 
+  const userMap = useMemo(() => {
+    const map: Record<
+      string,
+      Profile
+    > = {};
+
+    users.forEach((u) => {
+      map[u.id] = u;
+    });
+
+    return map;
+  }, [users]);
+
   const adminStats = useMemo(() => {
-    const customers = profiles.filter(
-      (p) =>
-        String(p.role).toLowerCase() ===
+    const totalUsers = users.length;
+
+    const customers = users.filter(
+      (u) =>
+        String(u.role).toLowerCase() ===
         "customer"
     ).length;
 
-    const providers = profiles.filter(
-      (p) =>
-        ["provider", "worker", "service_provider"].includes(
-          String(p.role).toLowerCase()
+    const providers = users.filter(
+      (u) =>
+        ["provider", "worker"].includes(
+          String(u.role).toLowerCase()
         )
-    ).length;
-
-    const activeUsers = profiles.filter(
-      (p) => p.is_active === true
     ).length;
 
     const pendingRequests =
       requests.filter(
-        (r) => r.status === STATUS.pending
+        (r) =>
+          r.status === STATUS.pending
       ).length;
 
-    const acceptedRequests =
-      requests.filter(
-        (r) => r.status === STATUS.accepted
-      ).length;
-
-    const progressRequests =
+    const activeJobs =
       requests.filter(
         (r) =>
+          r.status === STATUS.accepted ||
           r.status === STATUS.in_progress
       ).length;
 
-    const completedRequests =
+    const completed =
       requests.filter(
-        (r) => r.status === STATUS.completed
+        (r) =>
+          r.status === STATUS.completed
       ).length;
 
-    const paidPayments =
+    const pendingPayments =
       payments.filter(
         (p) =>
-          p.payment_status === "paid"
-      );
+          p.payment_status === "pending"
+      ).length;
 
-    const totalCollected =
-      paidPayments.reduce(
+    const paidAmount = payments
+      .filter(
+        (p) =>
+          p.payment_status === "paid"
+      )
+      .reduce(
         (sum, p) =>
           sum + Number(p.amount || 0),
         0
       );
 
-    const platformEarnings =
-      paidPayments.reduce(
-        (sum, p) =>
-          sum +
-          Number(p.platform_fee || 0),
-        0
-      );
-
-    const providerPayable =
-      paidPayments.reduce(
-        (sum, p) =>
-          sum +
-          Number(
-            p.provider_amount || 0
-          ),
-        0
-      );
-
     return {
-      users: profiles.length,
+      totalUsers,
       customers,
       providers,
-      activeUsers,
       requests: requests.length,
       pendingRequests,
-      acceptedRequests,
-      progressRequests,
-      completedRequests,
+      activeJobs,
+      completed,
       matches: matches.length,
-      notifications: notifications.length,
-      unreadNotifications: unreadCount,
-      payments: payments.length,
-      paidPayments: paidPayments.length,
-      totalCollected,
-      platformEarnings,
-      providerPayable,
+      pendingPayments,
+      paidAmount,
     };
   }, [
-    profiles,
+    users,
     requests,
     matches,
-    notifications,
     payments,
-    unreadCount,
   ]);
+
+  const filteredAdminRequests =
+    useMemo(() => {
+      const search =
+        adminSearch.trim().toLowerCase();
+
+      return requests.filter((r) => {
+        const matchesStatus =
+          requestFilter === "all" ||
+          r.status === requestFilter;
+
+        const matchesSearch =
+          !search ||
+          String(r.need || "")
+            .toLowerCase()
+            .includes(search) ||
+          String(r.location || "")
+            .toLowerCase()
+            .includes(search) ||
+          String(r.category || "")
+            .toLowerCase()
+            .includes(search) ||
+          String(r.id || "")
+            .toLowerCase()
+            .includes(search);
+
+        return (
+          matchesStatus &&
+          matchesSearch
+        );
+      });
+    }, [
+      requests,
+      requestFilter,
+      adminSearch,
+    ]);
 
   const filteredUsers = useMemo(() => {
     const search =
       adminSearch.trim().toLowerCase();
 
-    return profiles.filter((p) => {
-      const roleMatch =
-        adminFilter === "all" ||
-        String(p.role || "").toLowerCase() ===
-          adminFilter;
+    if (!search) return users;
 
-      if (!roleMatch) return false;
-
-      if (!search) return true;
-
-      return (
-        String(p.full_name || "")
-          .toLowerCase()
-          .includes(search) ||
-        String(p.phone || "")
-          .toLowerCase()
-          .includes(search) ||
-        String(p.role || "")
-          .toLowerCase()
-          .includes(search) ||
-        p.id.toLowerCase().includes(search)
-      );
-    });
-  }, [
-    profiles,
-    adminSearch,
-    adminFilter,
-  ]);
-
-  const filteredRequests = useMemo(() => {
-    const search =
-      adminSearch.trim().toLowerCase();
-
-    return requests.filter((r) => {
-      if (!search) return true;
-
-      return (
-        String(r.need || "")
-          .toLowerCase()
-          .includes(search) ||
-        String(r.category || "")
-          .toLowerCase()
-          .includes(search) ||
-        String(r.location || "")
-          .toLowerCase()
-          .includes(search) ||
-        String(r.status || "")
-          .toLowerCase()
-          .includes(search)
-      );
-    });
-  }, [requests, adminSearch]);
-
-  const filteredPayments = useMemo(() => {
-    const search =
-      adminSearch.trim().toLowerCase();
-
-    return payments.filter((p) => {
-      if (!search) return true;
-
-      return (
-        String(p.transaction_id || "")
-          .toLowerCase()
-          .includes(search) ||
-        String(p.payment_status || "")
-          .toLowerCase()
-          .includes(search) ||
-        String(p.payment_method || "")
-          .toLowerCase()
-          .includes(search) ||
-        String(p.customer_id || "")
-          .toLowerCase()
-          .includes(search) ||
-        String(p.provider_id || "")
-          .toLowerCase()
-          .includes(search)
-      );
-    });
-  }, [payments, adminSearch]);
-
-  function userName(id?: string | null) {
-    if (!id) return "Not assigned";
-
-    const found = profiles.find(
-      (p) => p.id === id
+    return users.filter((u) =>
+      [
+        u.full_name,
+        u.phone,
+        u.role,
+        u.preferred_address,
+        u.service_area,
+        u.id,
+      ]
+        .filter(Boolean)
+        .some((value) =>
+          String(value)
+            .toLowerCase()
+            .includes(search)
+        )
     );
+  }, [users, adminSearch]);
 
-    return (
-      found?.full_name ||
-      found?.phone ||
-      shortId(id)
-    );
-  }
+  const filteredPayments =
+    useMemo(() => {
+      const search =
+        adminSearch.trim().toLowerCase();
+
+      return payments.filter((p) => {
+        const matchesStatus =
+          paymentFilter === "all" ||
+          p.payment_status ===
+            paymentFilter;
+
+        const customer =
+          p.customer_id
+            ? userMap[p.customer_id]
+            : null;
+
+        const provider =
+          p.provider_id
+            ? userMap[p.provider_id]
+            : null;
+
+        const matchesSearch =
+          !search ||
+          String(p.id || "")
+            .toLowerCase()
+            .includes(search) ||
+          String(
+            p.transaction_id || ""
+          )
+            .toLowerCase()
+            .includes(search) ||
+          String(
+            customer?.full_name || ""
+          )
+            .toLowerCase()
+            .includes(search) ||
+          String(
+            provider?.full_name || ""
+          )
+            .toLowerCase()
+            .includes(search);
+
+        return (
+          matchesStatus &&
+          matchesSearch
+        );
+      });
+    }, [
+      payments,
+      paymentFilter,
+      adminSearch,
+      userMap,
+    ]);
 
   if (loading) {
     return (
-      <div className="loadingScreen">
-        <div className="mascot">💡😎</div>
-        <h2>JUGAAD lag raha hai...</h2>
+      <div className="app-loading">
+        <div className="loading-logo">
+          💡😎
+        </div>
+        <h2>JUGAAD</h2>
         <p>
-          Thoda ruk bhai, jugaad start ho raha hai 😄
+          Jugaad machine garam ho rahi hai...
         </p>
       </div>
     );
@@ -1183,433 +1128,387 @@ export default function App() {
 
   if (!user) {
     return (
-      <div className="loginScreen">
-        <div className="logoBox">
-          💡😎
+      <div className="auth-screen">
+        <div className="auth-card">
+          <div className="brand-big">
+            💡😎
+          </div>
+
+          <h1>JUGAAD</h1>
+
+          <p>
+            Har zarurat ka jugaad 🇮🇳
+          </p>
+
+          <button
+            className="primary-btn"
+            onClick={async () => {
+              setMessage(
+                "🔐 Login flow app ke existing Auth screen se chalega."
+              );
+            }}
+          >
+            JUGAAD Karo →
+          </button>
+
+          <p className="small-note">
+            Login ke baad JUGAAD khud samajh
+            jayega ki Customer, Provider ya
+            Admin kaun hai.
+          </p>
+
+          {message && (
+            <div className="toast">
+              {message}
+            </div>
+          )}
         </div>
-
-        <h1>JUGAAD</h1>
-
-        <p className="tagline">
-          Har zarurat ka jugaad 🇮🇳
-        </p>
-
-        <h2>
-          Jo chahiye, JUGAAD se milega
-        </h2>
-
-        <p>
-          Gaon ho ya metro, kaam chhota ho ya bada —
-          JUGAAD dekhega kya karna hai. 😎
-        </p>
-
-        <button
-          className="primaryButton bigButton"
-          onClick={login}
-        >
-          Google se Login 🚀
-        </button>
       </div>
     );
   }
 
-  /* =====================================================
-     ADMIN
-     ===================================================== */
-
   if (isAdmin) {
-    const adminTitle =
-      tab === "admin"
-        ? "Dashboard"
-        : tab === "adminUsers"
-        ? "Users"
-        : tab === "adminRequests"
-        ? "Requests"
-        : tab === "adminMatches"
-        ? "Matches"
-        : tab === "adminPayments"
-        ? "Payments"
-        : "Notifications";
-
     return (
-      <div className="adminShell">
-        <aside className="adminSidebar">
-          <div className="adminLogo">
-            <span>💡😎</span>
-            <b>JUGAAD</b>
+      <div className="admin-app">
+        <aside className="admin-sidebar">
+          <div className="admin-brand">
+            <div className="admin-logo">
+              💡😎
+            </div>
+
+            <div>
+              <strong>JUGAAD</strong>
+              <span>CONTROL ROOM</span>
+            </div>
           </div>
 
-          <div className="adminTitle">
-            Admin Control Room
-          </div>
+          <nav className="admin-nav">
+            <button
+              className={
+                adminSection === "dashboard"
+                  ? "active"
+                  : ""
+              }
+              onClick={() =>
+                setAdminSection(
+                  "dashboard"
+                )
+              }
+            >
+              📊 Dashboard
+            </button>
 
-          <button
-            className={
-              tab === "admin"
-                ? "sideButton active"
-                : "sideButton"
-            }
-            onClick={() => {
-              setTab("admin");
-              setAdminSearch("");
-            }}
-          >
-            📊 Dashboard
-          </button>
+            <button
+              className={
+                adminSection === "requests"
+                  ? "active"
+                  : ""
+              }
+              onClick={() =>
+                setAdminSection(
+                  "requests"
+                )
+              }
+            >
+              📋 Requests
+            </button>
 
-          <button
-            className={
-              tab === "adminUsers"
-                ? "sideButton active"
-                : "sideButton"
-            }
-            onClick={() => {
-              setTab("adminUsers");
-              setAdminSearch("");
-            }}
-          >
-            👥 Users
-          </button>
+            <button
+              className={
+                adminSection === "matches"
+                  ? "active"
+                  : ""
+              }
+              onClick={() =>
+                setAdminSection(
+                  "matches"
+                )
+              }
+            >
+              🤝 Matches
+            </button>
 
-          <button
-            className={
-              tab === "adminRequests"
-                ? "sideButton active"
-                : "sideButton"
-            }
-            onClick={() => {
-              setTab("adminRequests");
-              setAdminSearch("");
-            }}
-          >
-            📋 Requests
-          </button>
+            <button
+              className={
+                adminSection === "users"
+                  ? "active"
+                  : ""
+              }
+              onClick={() =>
+                setAdminSection(
+                  "users"
+                )
+              }
+            >
+              👥 Users
+            </button>
 
-          <button
-            className={
-              tab === "adminMatches"
-                ? "sideButton active"
-                : "sideButton"
-            }
-            onClick={() => {
-              setTab("adminMatches");
-              setAdminSearch("");
-            }}
-          >
-            🤝 Matches
-          </button>
+            <button
+              className={
+                adminSection === "payments"
+                  ? "active"
+                  : ""
+              }
+              onClick={() =>
+                setAdminSection(
+                  "payments"
+                )
+              }
+            >
+              💳 Payments
+            </button>
 
-          <button
-            className={
-              tab === "adminPayments"
-                ? "sideButton active"
-                : "sideButton"
-            }
-            onClick={() => {
-              setTab("adminPayments");
-              setAdminSearch("");
-            }}
-          >
-            💰 Payments
-          </button>
+            <button
+              className={
+                adminSection ===
+                "notifications"
+                  ? "active"
+                  : ""
+              }
+              onClick={() =>
+                setAdminSection(
+                  "notifications"
+                )
+              }
+            >
+              🔔 Notifications
+              {unreadCount > 0 && (
+                <span className="nav-badge">
+                  {unreadCount}
+                </span>
+              )}
+            </button>
+          </nav>
 
-          <button
-            className={
-              tab === "adminNotifications"
-                ? "sideButton active"
-                : "sideButton"
-            }
-            onClick={() =>
-              setTab("adminNotifications")
-            }
-          >
-            🔔 Notifications
-            {unreadCount > 0 && (
-              <span className="sideBadge">
-                {unreadCount}
-              </span>
-            )}
-          </button>
-
-          <div className="sidebarBottom">
-            <div className="adminSidebarProfile">
+          <div className="admin-sidebar-bottom">
+            <div className="admin-user-mini">
               <div className="avatar">
                 👨‍💼
               </div>
 
               <div>
-                <b>
+                <strong>
                   {profile?.full_name ||
                     user.email ||
                     "Admin"}
-                </b>
+                </strong>
 
-                <small>
+                <span>
                   Administrator
-                </small>
+                </span>
               </div>
             </div>
 
             <button
-              className="logoutButton"
-              onClick={logout}
+              className="logout-btn"
+              onClick={signOut}
             >
-              🚪 Logout
+              ↪ Logout
             </button>
           </div>
         </aside>
 
-        <main className="adminMain">
-          <div className="adminTopbar">
+        <main className="admin-main">
+          <header className="admin-topbar">
             <div>
-              <h1>{adminTitle}</h1>
+              <h1>
+                {adminSection ===
+                  "dashboard" &&
+                  "Dashboard"}
+                {adminSection ===
+                  "requests" &&
+                  "All Requests"}
+                {adminSection ===
+                  "matches" &&
+                  "Matches"}
+                {adminSection ===
+                  "users" &&
+                  "Users"}
+                {adminSection ===
+                  "payments" &&
+                  "Payments"}
+                {adminSection ===
+                  "notifications" &&
+                  "Notifications"}
+              </h1>
+
               <p>
                 JUGAAD control room 😎
               </p>
             </div>
 
-            <div className="adminTopActions">
+            <div className="admin-top-actions">
               <button
-                className="refreshAdmin"
-                onClick={loadAdminData}
-              >
-                {adminLoading
-                  ? "Refreshing..."
-                  : "↻ Refresh"}
-              </button>
-
-              <button
-                className="adminUser"
+                className="icon-btn"
                 onClick={() =>
-                  setTab("adminNotifications")
+                  setAdminSection(
+                    "notifications"
+                  )
                 }
               >
+                🔔
+                {unreadCount > 0 && (
+                  <span>
+                    {unreadCount}
+                  </span>
+                )}
+              </button>
+
+              <div className="admin-profile">
                 <div className="avatar">
                   👨‍💼
                 </div>
 
                 <div>
-                  <b>
+                  <strong>
                     {profile?.full_name ||
                       user.email ||
                       "Admin"}
-                  </b>
+                  </strong>
 
                   <small>
-                    {unreadCount > 0
-                      ? `🔔 ${unreadCount} new`
-                      : "Administrator"}
+                    Administrator
                   </small>
                 </div>
-              </button>
-            </div>
-          </div>
-
-          {message && (
-            <div className="messageBox">
-              {message}
-            </div>
-          )}
-
-          {/* ================= DASHBOARD ================= */}
-
-          {tab === "admin" && (
-            <>
-              <div className="statsGrid">
-                <div className="statCard">
-                  <span>👥</span>
-                  <small>Total Users</small>
-                  <strong>
-                    {adminStats.users}
-                  </strong>
-                  <em>
-                    {adminStats.activeUsers} active
-                  </em>
-                </div>
-
-                <div className="statCard">
-                  <span>📋</span>
-                  <small>Total Requests</small>
-                  <strong>
-                    {adminStats.requests}
-                  </strong>
-                  <em>
-                    {adminStats.pendingRequests} pending
-                  </em>
-                </div>
-
-                <div className="statCard">
-                  <span>🤝</span>
-                  <small>Total Matches</small>
-                  <strong>
-                    {adminStats.matches}
-                  </strong>
-                  <em>
-                    {adminStats.acceptedRequests} accepted
-                  </em>
-                </div>
-
-                <div className="statCard">
-                  <span>💰</span>
-                  <small>Total Collected</small>
-                  <strong>
-                    {money(
-                      adminStats.totalCollected
-                    )}
-                  </strong>
-                  <em>
-                    {adminStats.paidPayments} paid
-                  </em>
-                </div>
               </div>
+            </div>
+          </header>
 
-              <div className="statsGrid">
-                <div className="statCard">
-                  <span>🧑</span>
-                  <small>Customers</small>
-                  <strong>
-                    {adminStats.customers}
-                  </strong>
-                </div>
-
-                <div className="statCard">
-                  <span>🧰</span>
-                  <small>Providers</small>
-                  <strong>
-                    {adminStats.providers}
-                  </strong>
-                </div>
-
-                <div className="statCard">
-                  <span>🔔</span>
-                  <small>Unread Alerts</small>
-                  <strong>
-                    {adminStats.unreadNotifications}
-                  </strong>
-                </div>
-
-                <div className="statCard">
-                  <span>💸</span>
-                  <small>JUGAAD Earnings</small>
-                  <strong>
-                    {money(
-                      adminStats.platformEarnings
-                    )}
-                  </strong>
-                </div>
+          <div className="admin-content">
+            {message && (
+              <div className="admin-message">
+                {message}
+                <button
+                  onClick={() =>
+                    setMessage("")
+                  }
+                >
+                  ×
+                </button>
               </div>
+            )}
 
-              <section className="adminPanel">
-                <div className="panelHeader">
-                  <div>
-                    <h2>⚡ Live Overview</h2>
-                    <p>
-                      Abhi JUGAAD mein kya chal raha hai
-                    </p>
+            {adminSection ===
+              "dashboard" && (
+              <>
+                <div className="admin-stats">
+                  <div className="stat-card">
+                    <span>👥</span>
+                    <div>
+                      <small>Total Users</small>
+                      <strong>
+                        {adminStats.totalUsers}
+                      </strong>
+                    </div>
                   </div>
 
-                  <button
-                    onClick={loadAdminData}
-                  >
-                    Update ↻
-                  </button>
+                  <div className="stat-card">
+                    <span>📋</span>
+                    <div>
+                      <small>Requests</small>
+                      <strong>
+                        {adminStats.requests}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="stat-card">
+                    <span>🤝</span>
+                    <div>
+                      <small>Matches</small>
+                      <strong>
+                        {adminStats.matches}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="stat-card">
+                    <span>💳</span>
+                    <div>
+                      <small>Paid Amount</small>
+                      <strong>
+                        ₹
+                        {adminStats.paidAmount.toLocaleString(
+                          "en-IN"
+                        )}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="stat-card">
+                    <span>⏳</span>
+                    <div>
+                      <small>Pending Requests</small>
+                      <strong>
+                        {
+                          adminStats.pendingRequests
+                        }
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="stat-card">
+                    <span>🛠️</span>
+                    <div>
+                      <small>Active Jobs</small>
+                      <strong>
+                        {adminStats.activeJobs}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="stat-card">
+                    <span>✅</span>
+                    <div>
+                      <small>Completed</small>
+                      <strong>
+                        {adminStats.completed}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="stat-card">
+                    <span>💰</span>
+                    <div>
+                      <small>Pending Payments</small>
+                      <strong>
+                        {
+                          adminStats.pendingPayments
+                        }
+                      </strong>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="adminOverviewGrid">
-                  <div className="overviewBox">
-                    <b>📋 Requests</b>
-                    <span>
-                      {adminStats.pendingRequests} Pending
-                    </span>
-                    <span>
-                      {adminStats.acceptedRequests} Accepted
-                    </span>
-                    <span>
-                      {adminStats.progressRequests} In Progress
-                    </span>
-                    <span>
-                      {adminStats.completedRequests} Completed
-                    </span>
+                <section className="admin-panel">
+                  <div className="panel-heading">
+                    <div>
+                      <h2>
+                        Recent Requests
+                      </h2>
+                      <p>
+                        Customer ki latest
+                        requirements
+                      </p>
+                    </div>
+
+                    <button
+                      className="outline-btn"
+                      onClick={() =>
+                        setAdminSection(
+                          "requests"
+                        )
+                      }
+                    >
+                      View All →
+                    </button>
                   </div>
 
-                  <div className="overviewBox">
-                    <b>💰 Payments</b>
-                    <span>
-                      {payments.filter(
-                        (p) =>
-                          p.payment_status ===
-                          "pending"
-                      ).length}{" "}
-                      Pending
-                    </span>
-                    <span>
-                      {adminStats.paidPayments} Paid
-                    </span>
-                    <span>
-                      {payments.filter(
-                        (p) =>
-                          p.payment_status ===
-                          "failed"
-                      ).length}{" "}
-                      Failed
-                    </span>
-                    <span>
-                      {money(
-                        adminStats.providerPayable
-                      )}{" "}
-                      Provider payable
-                    </span>
-                  </div>
-
-                  <div className="overviewBox">
-                    <b>👥 Users</b>
-                    <span>
-                      {adminStats.customers} Customers
-                    </span>
-                    <span>
-                      {adminStats.providers} Providers
-                    </span>
-                    <span>
-                      {adminStats.activeUsers} Active
-                    </span>
-                    <span>
-                      {adminStats.users -
-                        adminStats.activeUsers}{" "}
-                      Inactive
-                    </span>
-                  </div>
-                </div>
-              </section>
-
-              <section className="adminPanel">
-                <div className="panelHeader">
-                  <div>
-                    <h2>📋 Recent Requests</h2>
-                    <p>
-                      Latest customer requirements
-                    </p>
-                  </div>
-
-                  <button
-                    onClick={() =>
-                      setTab("adminRequests")
-                    }
-                  >
-                    Sab dekho →
-                  </button>
-                </div>
-
-                {requests.length === 0 ? (
-                  <div className="emptyState">
-                    📭 Abhi koi request nahi.
-                  </div>
-                ) : (
-                  <div className="tableWrap">
-                    <table>
+                  <div className="request-table-wrap">
+                    <table className="admin-table">
                       <thead>
                         <tr>
-                          <th>Need</th>
-                          <th>Customer</th>
+                          <th>Requirement</th>
                           <th>Location</th>
                           <th>Status</th>
                           <th>Date</th>
@@ -1618,1245 +1517,1081 @@ export default function App() {
 
                       <tbody>
                         {requests
-                          .slice(0, 10)
-                          .map((request) => (
-                            <tr
-                              key={request.id}
-                              onClick={() =>
-                                setSelectedRequest(
-                                  request
-                                )
-                              }
-                            >
+                          .slice(0, 8)
+                          .map((r) => (
+                            <tr key={r.id}>
                               <td>
-                                <b>
-                                  {request.need ||
-                                    "No description"}
-                                </b>
+                                <strong>
+                                  {r.need ||
+                                    "Requirement"}
+                                </strong>
+
+                                <small>
+                                  {r.category ||
+                                    "Other"}
+                                </small>
                               </td>
 
                               <td>
-                                {userName(
-                                  request.user_id
-                                )}
+                                📍{" "}
+                                {r.location ||
+                                  "Location not given"}
                               </td>
 
                               <td>
-                                {request.location ||
-                                  "Not provided"}
-                              </td>
-
-                              <td>
-                                <span className="statusPill">
+                                <span
+                                  className={`status status-${r.status}`}
+                                >
                                   {statusLabel(
-                                    request.status
+                                    r.status
                                   )}
                                 </span>
                               </td>
 
                               <td>
                                 {formatDate(
-                                  request.created_at ||
-                                    request.create_at
+                                  r.created_at ||
+                                    r.create_at
                                 )}
                               </td>
                             </tr>
                           ))}
+
+                        {requests.length ===
+                          0 && (
+                          <tr>
+                            <td
+                              colSpan={4}
+                              className="empty-cell"
+                            >
+                              Abhi koi request
+                              nahi hai 😴
+                            </td>
+                          </tr>
+                        )}
                       </tbody>
                     </table>
                   </div>
-                )}
-              </section>
-            </>
-          )}
+                </section>
+              </>
+            )}
 
-          {/* ================= USERS ================= */}
+            {adminSection ===
+              "requests" && (
+              <section className="admin-panel">
+                <div className="panel-heading">
+                  <div>
+                    <h2>
+                      All Customer Requests
+                    </h2>
+                    <p>
+                      Har requirement yahin se
+                      manage karo.
+                    </p>
+                  </div>
 
-          {tab === "adminUsers" && (
-            <section className="adminPanel">
-              <div className="panelHeader">
-                <div>
-                  <h2>
-                    👥 JUGAAD Users
-                  </h2>
+                  <div className="toolbar">
+                    <input
+                      value={adminSearch}
+                      onChange={(e) =>
+                        setAdminSearch(
+                          e.target.value
+                        )
+                      }
+                      placeholder="🔎 Search request..."
+                    />
 
-                  <p>
-                    {filteredUsers.length} users found
-                  </p>
-                </div>
-              </div>
-
-              <div className="adminFilters">
-                <input
-                  value={adminSearch}
-                  onChange={(e) =>
-                    setAdminSearch(
-                      e.target.value
-                    )
-                  }
-                  placeholder="🔎 Name, phone, role ya ID search..."
-                />
-
-                <select
-                  value={adminFilter}
-                  onChange={(e) =>
-                    setAdminFilter(
-                      e.target.value
-                    )
-                  }
-                >
-                  <option value="all">
-                    Sab Users
-                  </option>
-                  <option value="customer">
-                    Customers
-                  </option>
-                  <option value="provider">
-                    Providers
-                  </option>
-                  <option value="worker">
-                    Workers
-                  </option>
-                  <option value="admin">
-                    Admins
-                  </option>
-                </select>
-              </div>
-
-              {filteredUsers.length === 0 ? (
-                <div className="emptyState">
-                  👤 Koi user nahi mila.
-                </div>
-              ) : (
-                <div className="userAdminGrid">
-                  {filteredUsers.map((p) => (
-                    <div
-                      className="userAdminCard"
-                      key={p.id}
+                    <select
+                      value={requestFilter}
+                      onChange={(e) =>
+                        setRequestFilter(
+                          e.target.value
+                        )
+                      }
                     >
-                      <div className="userCardHead">
-                        <div className="bigAvatar">
-                          {p.avatar_url ? (
-                            <img
-                              src={p.avatar_url}
-                              alt=""
-                            />
-                          ) : (
-                            "👤"
-                          )}
-                        </div>
+                      <option value="all">
+                        All Status
+                      </option>
+                      <option value="pending">
+                        Pending
+                      </option>
+                      <option value="accepted">
+                        Accepted
+                      </option>
+                      <option value="in_progress">
+                        In Progress
+                      </option>
+                      <option value="completed">
+                        Completed
+                      </option>
+                      <option value="cancelled">
+                        Cancelled
+                      </option>
+                    </select>
+                  </div>
+                </div>
 
-                        <div>
+                <div className="request-admin-grid">
+                  {filteredAdminRequests.map(
+                    (r) => {
+                      const customer =
+                        r.user_id
+                          ? userMap[r.user_id]
+                          : null;
+
+                      const provider =
+                        r.provider_id
+                          ? userMap[
+                              r.provider_id
+                            ]
+                          : null;
+
+                      return (
+                        <div
+                          className="request-admin-card"
+                          key={r.id}
+                        >
+                          <div className="card-top">
+                            <span className="category-chip">
+                              {r.category ||
+                                "Other"}
+                            </span>
+
+                            <span
+                              className={`status status-${r.status}`}
+                            >
+                              {statusLabel(
+                                r.status
+                              )}
+                            </span>
+                          </div>
+
                           <h3>
-                            {p.full_name ||
-                              "JUGAAD User"}
+                            {r.need ||
+                              "Requirement"}
                           </h3>
 
-                          <span className="roleBadge">
-                            {roleLabel(p.role)}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="userInfo">
-                        <p>
-                          📱{" "}
-                          {p.phone ||
-                            "Phone not added"}
-                        </p>
-
-                        <p>
-                          📍{" "}
-                          {p.preferred_address ||
-                            p.service_area ||
-                            "Address not added"}
-                        </p>
-
-                        <p>
-                          ⭐{" "}
-                          {p.rating ?? 0} &nbsp; | &nbsp;
-                          🛠️{" "}
-                          {p.completed_job ?? 0} jobs
-                        </p>
-                      </div>
-
-                      <div className="userStatusRow">
-                        <span
-                          className={
-                            p.is_active
-                              ? "statusPill success"
-                              : "statusPill"
-                          }
-                        >
-                          {p.is_active
-                            ? "🟢 Active"
-                            : "🔴 Inactive"}
-                        </span>
-
-                        {String(
-                          p.role || ""
-                        ).toLowerCase() ===
-                          "provider" && (
-                          <span className="statusPill">
-                            {p.is_verified
-                              ? "✅ Verified"
-                              : "⚠️ Unverified"}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="adminCardActions">
-                        <button
-                          onClick={() =>
-                            adminUpdateUser(
-                              p.id,
-                              {
-                                is_active:
-                                  !p.is_active,
-                              }
-                            )
-                          }
-                        >
-                          {p.is_active
-                            ? "🔴 Deactivate"
-                            : "🟢 Activate"}
-                        </button>
-
-                        {[
-                          "provider",
-                          "worker",
-                        ].includes(
-                          String(
-                            p.role || ""
-                          ).toLowerCase()
-                        ) && (
-                          <button
-                            onClick={() =>
-                              adminUpdateUser(
-                                p.id,
-                                {
-                                  is_verified:
-                                    !p.is_verified,
-                                }
-                              )
-                            }
-                          >
-                            {p.is_verified
-                              ? "❌ Unverify"
-                              : "✅ Verify"}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          )}
-
-          {/* ================= REQUESTS ================= */}
-
-          {tab === "adminRequests" && (
-            <section className="adminPanel">
-              <div className="panelHeader">
-                <div>
-                  <h2>
-                    📋 All Requests
-                  </h2>
-
-                  <p>
-                    Customer ki sari requirements
-                  </p>
-                </div>
-              </div>
-
-              <div className="adminFilters">
-                <input
-                  value={adminSearch}
-                  onChange={(e) =>
-                    setAdminSearch(
-                      e.target.value
-                    )
-                  }
-                  placeholder="🔎 Requirement, category, location..."
-                />
-              </div>
-
-              {filteredRequests.length === 0 ? (
-                <div className="emptyState">
-                  📭 Koi request nahi.
-                </div>
-              ) : (
-                <div className="requestAdminGrid">
-                  {filteredRequests.map(
-                    (request) => (
-                      <div
-                        className="adminRequestCard"
-                        key={request.id}
-                      >
-                        <div className="cardTop">
-                          <span className="categoryTag">
-                            {request.category ||
-                              "General"}
-                          </span>
-
-                          <span className="statusPill">
-                            {statusLabel(
-                              request.status
-                            )}
-                          </span>
-                        </div>
-
-                        <h3>
-                          {request.need ||
-                            "Customer requirement"}
-                        </h3>
-
-                        <p>
-                          👤{" "}
-                          {userName(
-                            request.user_id
-                          )}
-                        </p>
-
-                        <p>
-                          📍{" "}
-                          {request.location ||
-                            "Location not given"}
-                        </p>
-
-                        {request.provider_id && (
                           <p>
-                            🧰 Provider:{" "}
-                            {userName(
-                              request.provider_id
-                            )}
+                            📍{" "}
+                            {r.location ||
+                              "Location not given"}
                           </p>
-                        )}
 
-                        <small>
-                          {formatDate(
-                            request.created_at ||
-                              request.create_at
-                          )}
-                        </small>
+                          <div className="request-meta">
+                            <div>
+                              <small>
+                                Customer
+                              </small>
+                              <strong>
+                                {customer
+                                  ?.full_name ||
+                                  r.user_id ||
+                                  "Unknown"}
+                              </strong>
+                            </div>
 
-                        <div className="adminCardActions">
-                          <button
-                            onClick={() =>
-                              setSelectedRequest(
-                                request
-                              )
-                            }
-                          >
-                            👁️ Details
-                          </button>
+                            <div>
+                              <small>
+                                Provider
+                              </small>
+                              <strong>
+                                {provider
+                                  ?.full_name ||
+                                  r.provider_id ||
+                                  "Not assigned"}
+                              </strong>
+                            </div>
 
-                          <select
-                            value={
-                              request.status ||
-                              STATUS.pending
-                            }
-                            onChange={(e) =>
-                              adminUpdateRequestStatus(
-                                request.id,
-                                e.target.value
-                              )
-                            }
-                          >
-                            <option value="pending">
-                              Pending
-                            </option>
-                            <option value="accepted">
-                              Accepted
-                            </option>
-                            <option value="in_progress">
-                              In Progress
-                            </option>
-                            <option value="completed">
-                              Completed
-                            </option>
-                            <option value="cancelled">
-                              Cancelled
-                            </option>
-                          </select>
+                            <div>
+                              <small>
+                                Created
+                              </small>
+                              <strong>
+                                {formatDate(
+                                  r.created_at ||
+                                    r.create_at
+                                )}
+                              </strong>
+                            </div>
+                          </div>
+
+                          <div className="card-actions">
+                            {r.status ===
+                              "pending" && (
+                              <button
+                                onClick={() =>
+                                  updateRequestStatus(
+                                    r.id,
+                                    "cancelled"
+                                  )
+                                }
+                              >
+                                Cancel
+                              </button>
+                            )}
+
+                            {r.status ===
+                              "accepted" && (
+                              <button
+                                onClick={() =>
+                                  updateRequestStatus(
+                                    r.id,
+                                    "in_progress"
+                                  )
+                                }
+                              >
+                                🛠️ Start
+                              </button>
+                            )}
+
+                            {r.status ===
+                              "in_progress" && (
+                              <button
+                                onClick={() =>
+                                  updateRequestStatus(
+                                    r.id,
+                                    "completed"
+                                  )
+                                }
+                              >
+                                ✅ Complete
+                              </button>
+                            )}
+
+                            {r.status ===
+                              "completed" && (
+                              <button
+                                onClick={() => {
+                                  setPaymentRequestId(
+                                    r.id
+                                  );
+                                  setPaymentFormOpen(
+                                    true
+                                  );
+                                }}
+                              >
+                                💳 Create Payment
+                              </button>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    )
+                      );
+                    }
+                  )}
+
+                  {filteredAdminRequests.length ===
+                    0 && (
+                    <div className="empty-state">
+                      <div>📭</div>
+                      <h3>
+                        Koi request nahi mili
+                      </h3>
+                      <p>
+                        Search/filter thoda
+                        halka karo 😄
+                      </p>
+                    </div>
                   )}
                 </div>
-              )}
-            </section>
-          )}
+              </section>
+            )}
 
-          {/* ================= MATCHES ================= */}
-
-          {tab === "adminMatches" && (
-            <section className="adminPanel">
-              <div className="panelHeader">
-                <div>
-                  <h2>
-                    🤝 Matches
-                  </h2>
-
-                  <p>
-                    Customer aur provider connections
-                  </p>
+            {adminSection ===
+              "matches" && (
+              <section className="admin-panel">
+                <div className="panel-heading">
+                  <div>
+                    <h2>
+                      All Matches
+                    </h2>
+                    <p>
+                      Customer aur provider
+                      connections.
+                    </p>
+                  </div>
                 </div>
-              </div>
 
-              {matches.length === 0 ? (
-                <div className="emptyState">
-                  🤝 Abhi koi match nahi.
-                </div>
-              ) : (
-                <div className="requestAdminGrid">
-                  {matches.map((match) => {
+                <div className="match-admin-grid">
+                  {matches.map((m) => {
                     const request =
-                      requests.find(
-                        (r) =>
-                          r.id ===
-                          match.request_id
-                      );
+                      requestMap[
+                        m.request_id
+                      ];
 
-                    const providerId =
-                      match.provider_id ||
-                      match.worker_id;
+                    const provider =
+                      m.provider_id ||
+                      m.worker_id
+                        ? userMap[
+                            (m.provider_id ||
+                              m.worker_id) as string
+                          ]
+                        : null;
+
+                    const customer =
+                      request?.user_id
+                        ? userMap[
+                            request.user_id
+                          ]
+                        : null;
+
+                    const matchStatus =
+                      m.status ||
+                      m.matches_status ||
+                      "pending";
 
                     return (
                       <div
-                        className="adminRequestCard"
-                        key={match.id}
+                        className="match-admin-card"
+                        key={m.id}
                       >
-                        <div className="cardTop">
-                          <span className="categoryTag">
-                            🤝 Match
-                          </span>
-
-                          <span className="statusPill">
-                            {match.status ||
-                              match.matches_status ||
-                              "accepted"}
-                          </span>
+                        <div className="match-icon">
+                          🤝
                         </div>
 
-                        <h3>
-                          {request?.need ||
-                            "JUGAAD Request"}
-                        </h3>
+                        <div className="match-main">
+                          <h3>
+                            {request?.need ||
+                              "Request"}
+                          </h3>
 
-                        <p>
-                          👤 Customer:{" "}
-                          <b>
-                            {userName(
-                              request?.user_id
-                            )}
-                          </b>
-                        </p>
-
-                        <p>
-                          🧰 Provider:{" "}
-                          <b>
-                            {userName(
-                              providerId
-                            )}
-                          </b>
-                        </p>
-
-                        {match.quoted_amount !=
-                          null && (
                           <p>
-                            💰 Quote:{" "}
-                            <b>
-                              {money(
-                                match.quoted_amount
-                              )}
-                            </b>
+                            📍{" "}
+                            {request?.location ||
+                              "Location not given"}
                           </p>
-                        )}
 
-                        {match.distance_km !=
-                          null && (
-                          <p>
-                            📍 Distance:{" "}
-                            {
-                              match.distance_km
-                            }{" "}
-                            km
-                          </p>
-                        )}
+                          <div className="match-people">
+                            <div>
+                              <small>
+                                Customer
+                              </small>
+                              <strong>
+                                {customer
+                                  ?.full_name ||
+                                  "Unknown"}
+                              </strong>
+                            </div>
 
-                        <small>
-                          {formatDate(
-                            match.created_at
-                          )}
-                        </small>
+                            <div>
+                              <small>
+                                Provider
+                              </small>
+                              <strong>
+                                {provider
+                                  ?.full_name ||
+                                  "Unknown"}
+                              </strong>
+                            </div>
+                          </div>
+                        </div>
 
-                        <div className="adminCardActions">
-                          <button
-                            onClick={() =>
-                              setSelectedMatch(
-                                match
-                              )
-                            }
+                        <div>
+                          <span
+                            className={`status status-${matchStatus}`}
                           >
-                            👁️ Full Details
-                          </button>
+                            {statusLabel(
+                              matchStatus
+                            )}
+                          </span>
+
+                          {m.quoted_amount !=
+                            null && (
+                            <strong className="match-price">
+                              ₹
+                              {Number(
+                                m.quoted_amount
+                              ).toLocaleString(
+                                "en-IN"
+                              )}
+                            </strong>
+                          )}
                         </div>
                       </div>
                     );
                   })}
+
+                  {matches.length === 0 && (
+                    <div className="empty-state">
+                      <div>🤝</div>
+                      <h3>
+                        Abhi match nahi hai
+                      </h3>
+                    </div>
+                  )}
                 </div>
-              )}
-            </section>
-          )}
+              </section>
+            )}
 
-          {/* ================= PAYMENTS ================= */}
+            {adminSection ===
+              "users" && (
+              <section className="admin-panel">
+                <div className="panel-heading">
+                  <div>
+                    <h2>
+                      User Management
+                    </h2>
+                    <p>
+                      Customer aur providers
+                      manage karo.
+                    </p>
+                  </div>
 
-          {tab === "adminPayments" && (
-            <section className="adminPanel">
-              <div className="panelHeader">
-                <div>
-                  <h2>
-                    💰 Payment Control Room
-                  </h2>
-
-                  <p>
-                    Payments, refunds aur provider payouts
-                  </p>
-                </div>
-
-                <button
-                  onClick={loadAdminData}
-                >
-                  ↻ Refresh
-                </button>
-              </div>
-
-              <div className="statsGrid">
-                <div className="statCard">
-                  <span>💳</span>
-                  <small>Transactions</small>
-                  <strong>
-                    {payments.length}
-                  </strong>
-                </div>
-
-                <div className="statCard">
-                  <span>✅</span>
-                  <small>Successful</small>
-                  <strong>
-                    {
-                      payments.filter(
-                        (p) =>
-                          p.payment_status ===
-                          "paid"
-                      ).length
-                    }
-                  </strong>
+                  <div className="toolbar">
+                    <input
+                      value={adminSearch}
+                      onChange={(e) =>
+                        setAdminSearch(
+                          e.target.value
+                        )
+                      }
+                      placeholder="🔎 Search user..."
+                    />
+                  </div>
                 </div>
 
-                <div className="statCard">
-                  <span>💵</span>
-                  <small>Collected</small>
-                  <strong>
-                    {money(
-                      adminStats.totalCollected
-                    )}
-                  </strong>
-                </div>
-
-                <div className="statCard">
-                  <span>🏦</span>
-                  <small>Platform Fee</small>
-                  <strong>
-                    {money(
-                      adminStats.platformEarnings
-                    )}
-                  </strong>
-                </div>
-              </div>
-
-              <div className="adminFilters">
-                <input
-                  value={adminSearch}
-                  onChange={(e) =>
-                    setAdminSearch(
-                      e.target.value
-                    )
-                  }
-                  placeholder="🔎 Transaction ID, customer, provider, status..."
-                />
-              </div>
-
-              {filteredPayments.length === 0 ? (
-                <div className="emptyState">
-                  💸 Abhi payment record nahi hai.
-                </div>
-              ) : (
-                <div className="paymentAdminGrid">
-                  {filteredPayments.map(
-                    (payment) => (
+                <div className="user-admin-grid">
+                  {filteredUsers.map(
+                    (u) => (
                       <div
-                        className="paymentAdminCard"
-                        key={payment.id}
+                        className="user-admin-card"
+                        key={u.id}
                       >
-                        <div className="cardTop">
-                          <span className="categoryTag">
-                            💳 Payment
-                          </span>
-
-                          <span className="statusPill">
-                            {paymentStatusLabel(
-                              payment.payment_status
+                        <div className="user-card-head">
+                          <div className="big-avatar">
+                            {u.avatar_url ? (
+                              <img
+                                src={
+                                  u.avatar_url
+                                }
+                                alt=""
+                              />
+                            ) : (
+                              "👤"
                             )}
-                          </span>
+                          </div>
+
+                          <div>
+                            <h3>
+                              {u.full_name ||
+                                "Unnamed User"}
+                            </h3>
+
+                            <p>
+                              {u.phone ||
+                                "Phone not added"}
+                            </p>
+
+                            <span className="role-chip">
+                              {u.role ||
+                                "customer"}
+                            </span>
+                          </div>
                         </div>
 
-                        <h3>
-                          {money(payment.amount)}
-                        </h3>
+                        <div className="user-info">
+                          <div>
+                            <small>
+                              Verification
+                            </small>
+                            <strong>
+                              {u.is_verified
+                                ? "✅ Verified"
+                                : "⚠️ Not Verified"}
+                            </strong>
+                          </div>
 
-                        <p>
-                          👤 Customer:{" "}
-                          <b>
-                            {userName(
-                              payment.customer_id
-                            )}
-                          </b>
-                        </p>
+                          <div>
+                            <small>
+                              Status
+                            </small>
+                            <strong>
+                              {u.is_active
+                                ? "🟢 Active"
+                                : "🔴 Inactive"}
+                            </strong>
+                          </div>
 
-                        <p>
-                          🧰 Provider:{" "}
-                          <b>
-                            {userName(
-                              payment.provider_id
-                            )}
-                          </b>
-                        </p>
+                          <div>
+                            <small>
+                              Rating
+                            </small>
+                            <strong>
+                              ⭐{" "}
+                              {u.rating ??
+                                "—"}
+                            </strong>
+                          </div>
 
-                        <p>
-                          🧾 Transaction:{" "}
-                          <span className="mono">
-                            {payment.transaction_id ||
-                              "Not provided"}
-                          </span>
-                        </p>
-
-                        <div className="paymentBreakdown">
-                          <span>
-                            JUGAAD fee:{" "}
-                            {money(
-                              payment.platform_fee
-                            )}
-                          </span>
-
-                          <span>
-                            Provider:{" "}
-                            {money(
-                              payment.provider_amount
-                            )}
-                          </span>
+                          <div>
+                            <small>
+                              Completed
+                            </small>
+                            <strong>
+                              {u.completed_job ??
+                                0}
+                            </strong>
+                          </div>
                         </div>
 
-                        <p>
-                          💸 Payout:{" "}
-                          {payment.payout_status}
-                        </p>
+                        <div className="user-actions">
+                          <select
+                            value={
+                              u.role ||
+                              "customer"
+                            }
+                            onChange={(e) =>
+                              updateUserRole(
+                                u.id,
+                                e.target.value
+                              )
+                            }
+                            disabled={
+                              u.id ===
+                              user.id
+                            }
+                          >
+                            <option value="customer">
+                              Customer
+                            </option>
+                            <option value="provider">
+                              Provider
+                            </option>
+                            <option value="worker">
+                              Worker
+                            </option>
+                            <option value="student">
+                              Student
+                            </option>
+                            <option value="government">
+                              Government
+                            </option>
+                          </select>
 
-                        <small>
-                          {formatDate(
-                            payment.created_at
-                          )}
-                        </small>
-
-                        <div className="adminCardActions">
                           <button
                             onClick={() =>
-                              setSelectedPayment(
-                                payment
+                              updateUserVerified(
+                                u.id,
+                                !Boolean(
+                                  u.is_verified
+                                )
                               )
                             }
                           >
-                            👁️ Details
+                            {u.is_verified
+                              ? "Unverify"
+                              : "Verify"}
                           </button>
 
-                          {payment.payment_status ===
-                            "pending" && (
-                            <button
-                              onClick={() =>
-                                adminPaymentStatus(
-                                  payment.id,
-                                  "paid"
+                          <button
+                            onClick={() =>
+                              updateUserActive(
+                                u.id,
+                                !Boolean(
+                                  u.is_active
                                 )
-                              }
-                            >
-                              ✅ Mark Paid
-                            </button>
-                          )}
-
-                          {payment.payment_status ===
-                            "processing" && (
-                            <button
-                              onClick={() =>
-                                adminPaymentStatus(
-                                  payment.id,
-                                  "paid"
-                                )
-                              }
-                            >
-                              ✅ Verify
-                            </button>
-                          )}
-
-                          {payment.payment_status ===
-                            "paid" &&
-                            payment.payout_status !==
-                              "paid" && (
-                              <button
-                                onClick={() =>
-                                  adminPayout(
-                                    payment.id,
-                                    "paid"
-                                  )
-                                }
-                              >
-                                💸 Payout
-                              </button>
-                            )}
+                              )
+                            }
+                          >
+                            {u.is_active
+                              ? "Deactivate"
+                              : "Activate"}
+                          </button>
                         </div>
                       </div>
                     )
                   )}
-                </div>
-              )}
-            </section>
-          )}
 
-          {/* ================= NOTIFICATIONS ================= */}
-
-          {tab === "adminNotifications" && (
-            <section className="adminPanel">
-              <div className="panelHeader">
-                <div>
-                  <h2>
-                    🔔 Notifications
-                  </h2>
-
-                  <p>
-                    JUGAAD activity alerts
-                  </p>
-                </div>
-
-                {unreadCount > 0 && (
-                  <button
-                    onClick={
-                      markAllNotificationsRead
-                    }
-                  >
-                    Sab read ✓
-                  </button>
-                )}
-              </div>
-
-              {notifications.length === 0 ? (
-                <div className="emptyState">
-                  🔕 Abhi notification nahi.
-                </div>
-              ) : (
-                <div className="notificationList">
-                  {notifications.map((n) => (
-                    <div
-                      className={
-                        n.is_read
-                          ? "notification read"
-                          : "notification"
-                      }
-                      key={n.id}
-                      onClick={() =>
-                        markNotificationRead(
-                          n.id
-                        )
-                      }
-                    >
-                      <div className="notificationIcon">
-                        🔔
-                      </div>
-
-                      <div>
-                        <b>{n.title}</b>
-                        <p>{n.message}</p>
-
-                        <small>
-                          {formatDate(
-                            n.created_at
-                          )}
-                        </small>
-                      </div>
-
-                      {!n.is_read && (
-                        <span className="newDot">
-                          NEW
-                        </span>
-                      )}
+                  {filteredUsers.length ===
+                    0 && (
+                    <div className="empty-state">
+                      <div>👥</div>
+                      <h3>
+                        User nahi mila
+                      </h3>
                     </div>
-                  ))}
+                  )}
                 </div>
-              )}
-            </section>
-          )}
-        </main>
+              </section>
+            )}
 
-        {/* ================= REQUEST MODAL ================= */}
+            {adminSection ===
+              "payments" && (
+              <section className="admin-panel">
+                <div className="panel-heading">
+                  <div>
+                    <h2>
+                      💳 Payment Control Room
+                    </h2>
+                    <p>
+                      Payment queries,
+                      verification aur
+                      status management.
+                    </p>
+                  </div>
 
-        {selectedRequest && (
-          <div
-            className="modalOverlay"
-            onClick={() =>
-              setSelectedRequest(null)
-            }
-          >
-            <div
-              className="adminModal"
-              onClick={(e) =>
-                e.stopPropagation()
-              }
-            >
-              <div className="modalHeader">
-                <div>
-                  <h2>
-                    📋 Request Details
-                  </h2>
-                  <small>
-                    {shortId(
-                      selectedRequest.id
-                    )}
-                  </small>
-                </div>
-
-                <button
-                  onClick={() =>
-                    setSelectedRequest(null)
-                  }
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="detailList">
-                <div>
-                  <span>Requirement</span>
-                  <b>
-                    {selectedRequest.need ||
-                      "—"}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Category</span>
-                  <b>
-                    {selectedRequest.category ||
-                      "General"}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Customer</span>
-                  <b>
-                    {userName(
-                      selectedRequest.user_id
-                    )}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Location</span>
-                  <b>
-                    {selectedRequest.location ||
-                      "Not provided"}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Provider</span>
-                  <b>
-                    {userName(
-                      selectedRequest.provider_id
-                    )}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Status</span>
-                  <b>
-                    {statusLabel(
-                      selectedRequest.status
-                    )}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Created</span>
-                  <b>
-                    {formatDate(
-                      selectedRequest.created_at ||
-                        selectedRequest.create_at
-                    )}
-                  </b>
-                </div>
-              </div>
-
-              <select
-                value={
-                  selectedRequest.status ||
-                  STATUS.pending
-                }
-                onChange={(e) => {
-                  adminUpdateRequestStatus(
-                    selectedRequest.id,
-                    e.target.value
-                  );
-
-                  setSelectedRequest({
-                    ...selectedRequest,
-                    status: e.target.value,
-                  });
-                }}
-              >
-                <option value="pending">
-                  ⏳ Pending
-                </option>
-
-                <option value="accepted">
-                  🤝 Accepted
-                </option>
-
-                <option value="in_progress">
-                  🚗 In Progress
-                </option>
-
-                <option value="completed">
-                  ✅ Completed
-                </option>
-
-                <option value="cancelled">
-                  ❌ Cancelled
-                </option>
-              </select>
-            </div>
-          </div>
-        )}
-
-        {/* ================= MATCH MODAL ================= */}
-
-        {selectedMatch && (
-          <div
-            className="modalOverlay"
-            onClick={() =>
-              setSelectedMatch(null)
-            }
-          >
-            <div
-              className="adminModal"
-              onClick={(e) =>
-                e.stopPropagation()
-              }
-            >
-              <div className="modalHeader">
-                <h2>
-                  🤝 Match Details
-                </h2>
-
-                <button
-                  onClick={() =>
-                    setSelectedMatch(null)
-                  }
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="detailList">
-                <div>
-                  <span>Request</span>
-                  <b>
-                    {shortId(
-                      selectedMatch.request_id
-                    )}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Customer</span>
-                  <b>
-                    {userName(
-                      requests.find(
-                        (r) =>
-                          r.id ===
-                          selectedMatch.request_id
-                      )?.user_id
-                    )}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Provider</span>
-                  <b>
-                    {userName(
-                      selectedMatch.provider_id ||
-                        selectedMatch.worker_id
-                    )}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Quote</span>
-                  <b>
-                    {selectedMatch.quoted_amount !=
-                    null
-                      ? money(
-                          selectedMatch.quoted_amount
+                  <div className="toolbar">
+                    <input
+                      value={adminSearch}
+                      onChange={(e) =>
+                        setAdminSearch(
+                          e.target.value
                         )
-                      : "Not quoted"}
-                  </b>
-                </div>
+                      }
+                      placeholder="🔎 Search payment..."
+                    />
 
-                <div>
-                  <span>Distance</span>
-                  <b>
-                    {selectedMatch.distance_km !=
-                    null
-                      ? `${selectedMatch.distance_km} km`
-                      : "Not available"}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Status</span>
-                  <b>
-                    {selectedMatch.status ||
-                      selectedMatch.matches_status ||
-                      "accepted"}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Created</span>
-                  <b>
-                    {formatDate(
-                      selectedMatch.created_at
-                    )}
-                  </b>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ================= PAYMENT MODAL ================= */}
-
-        {selectedPayment && (
-          <div
-            className="modalOverlay"
-            onClick={() =>
-              setSelectedPayment(null)
-            }
-          >
-            <div
-              className="adminModal"
-              onClick={(e) =>
-                e.stopPropagation()
-              }
-            >
-              <div className="modalHeader">
-                <div>
-                  <h2>
-                    💰 Payment Details
-                  </h2>
-
-                  <small>
-                    {shortId(
-                      selectedPayment.id
-                    )}
-                  </small>
-                </div>
-
-                <button
-                  onClick={() =>
-                    setSelectedPayment(null)
-                  }
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="detailList">
-                <div>
-                  <span>Amount</span>
-                  <b>
-                    {money(
-                      selectedPayment.amount
-                    )}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Customer</span>
-                  <b>
-                    {userName(
-                      selectedPayment.customer_id
-                    )}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Provider</span>
-                  <b>
-                    {userName(
-                      selectedPayment.provider_id
-                    )}
-                  </b>
-                </div>
-
-                <div>
-                  <span>JUGAAD Fee</span>
-                  <b>
-                    {money(
-                      selectedPayment.platform_fee
-                    )}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Provider Amount</span>
-                  <b>
-                    {money(
-                      selectedPayment.provider_amount
-                    )}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Payment Method</span>
-                  <b>
-                    {selectedPayment.payment_method ||
-                      "Not provided"}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Gateway</span>
-                  <b>
-                    {selectedPayment.payment_gateway ||
-                      "Not provided"}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Transaction ID</span>
-                  <b className="mono">
-                    {selectedPayment.transaction_id ||
-                      "Not provided"}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Payment Status</span>
-                  <b>
-                    {paymentStatusLabel(
-                      selectedPayment.payment_status
-                    )}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Refund</span>
-                  <b>
-                    {selectedPayment.refund_status}{" "}
-                    {selectedPayment.refund_amount
-                      ? `(${money(
-                          selectedPayment.refund_amount
-                        )})`
-                      : ""}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Provider Payout</span>
-                  <b>
-                    {selectedPayment.payout_status}
-                  </b>
-                </div>
-
-                <div>
-                  <span>Created</span>
-                  <b>
-                    {formatDate(
-                      selectedPayment.created_at
-                    )}
-                  </b>
-                </div>
-              </div>
-
-              <div className="modalActions">
-                {selectedPayment.payment_status !==
-                  "paid" &&
-                  selectedPayment.payment_status !==
-                    "refunded" && (
-                    <button
-                      className="primaryButton"
-                      onClick={() =>
-                        adminPaymentStatus(
-                          selectedPayment.id,
-                          "paid"
+                    <select
+                      value={paymentFilter}
+                      onChange={(e) =>
+                        setPaymentFilter(
+                          e.target.value
                         )
                       }
                     >
-                      ✅ Mark Payment Paid
+                      <option value="all">
+                        All Payments
+                      </option>
+                      <option value="pending">
+                        Pending
+                      </option>
+                      <option value="paid">
+                        Paid
+                      </option>
+                      <option value="failed">
+                        Failed
+                      </option>
+                      <option value="refunded">
+                        Refunded
+                      </option>
+                      <option value="cancelled">
+                        Cancelled
+                      </option>
+                    </select>
+
+                    <button
+                      className="primary-small-btn"
+                      onClick={() =>
+                        setPaymentFormOpen(
+                          true
+                        )
+                      }
+                    >
+                      + New Payment
+                    </button>
+                  </div>
+                </div>
+
+                <div className="payment-summary">
+                  <div>
+                    <small>
+                      Total Queries
+                    </small>
+                    <strong>
+                      {payments.length}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <small>
+                      Pending
+                    </small>
+                    <strong>
+                      {
+                        adminStats.pendingPayments
+                      }
+                    </strong>
+                  </div>
+
+                  <div>
+                    <small>
+                      Paid Value
+                    </small>
+                    <strong>
+                      ₹
+                      {adminStats.paidAmount.toLocaleString(
+                        "en-IN"
+                      )}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="payment-table-wrap">
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>Payment</th>
+                        <th>Customer</th>
+                        <th>Provider</th>
+                        <th>Amount</th>
+                        <th>Method</th>
+                        <th>Transaction</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {filteredPayments.map(
+                        (p) => {
+                          const customer =
+                            p.customer_id
+                              ? userMap[
+                                  p.customer_id
+                                ]
+                              : null;
+
+                          const provider =
+                            p.provider_id
+                              ? userMap[
+                                  p.provider_id
+                                ]
+                              : null;
+
+                          return (
+                            <tr key={p.id}>
+                              <td>
+                                <strong>
+                                  #
+                                  {p.id.slice(
+                                    0,
+                                    8
+                                  )}
+                                </strong>
+
+                                <small>
+                                  {formatDate(
+                                    p.created_at
+                                  )}
+                                </small>
+                              </td>
+
+                              <td>
+                                {customer
+                                  ?.full_name ||
+                                  "—"}
+                              </td>
+
+                              <td>
+                                {provider
+                                  ?.full_name ||
+                                  "—"}
+                              </td>
+
+                              <td>
+                                <strong>
+                                  ₹
+                                  {Number(
+                                    p.amount ||
+                                      0
+                                  ).toLocaleString(
+                                    "en-IN"
+                                  )}
+                                </strong>
+                              </td>
+
+                              <td>
+                                {p.payment_method ||
+                                  "—"}
+                              </td>
+
+                              <td>
+                                {p.transaction_id ||
+                                  "Not added"}
+                              </td>
+
+                              <td>
+                                <span
+                                  className={`status payment-${p.payment_status}`}
+                                >
+                                  {paymentLabel(
+                                    p.payment_status
+                                  )}
+                                </span>
+                              </td>
+
+                              <td>
+                                <div className="payment-actions">
+                                  {p.payment_status ===
+                                    "pending" && (
+                                    <>
+                                      <button
+                                        onClick={() =>
+                                          updatePaymentStatus(
+                                            p.id,
+                                            "paid"
+                                          )
+                                        }
+                                      >
+                                        ✅ Paid
+                                      </button>
+
+                                      <button
+                                        onClick={() =>
+                                          updatePaymentStatus(
+                                            p.id,
+                                            "failed"
+                                          )
+                                        }
+                                      >
+                                        ❌ Fail
+                                      </button>
+                                    </>
+                                  )}
+
+                                  {p.payment_status ===
+                                    "paid" && (
+                                    <button
+                                      onClick={() =>
+                                        updatePaymentStatus(
+                                          p.id,
+                                          "refunded"
+                                        )
+                                      }
+                                    >
+                                      ↩️ Refund
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        }
+                      )}
+
+                      {filteredPayments.length ===
+                        0 && (
+                        <tr>
+                          <td
+                            colSpan={8}
+                            className="empty-cell"
+                          >
+                            Abhi payment query
+                            nahi hai 💸
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
+
+            {adminSection ===
+              "notifications" && (
+              <section className="admin-panel">
+                <div className="panel-heading">
+                  <div>
+                    <h2>
+                      🔔 Notifications
+                    </h2>
+                    <p>
+                      JUGAAD activity alerts.
+                    </p>
+                  </div>
+
+                  {unreadCount > 0 && (
+                    <button
+                      className="outline-btn"
+                      onClick={
+                        markAllNotificationsRead
+                      }
+                    >
+                      Mark all read
                     </button>
                   )}
+                </div>
 
-                {selectedPayment.payment_status ===
-                  "paid" && (
-                  <>
-                    <button
-                      className="primaryButton"
-                      onClick={() =>
-                        adminPayout(
-                          selectedPayment.id,
-                          "paid"
-                        )
-                      }
+                <div className="notification-admin-list">
+                  {notifications.map(
+                    (n) => (
+                      <div
+                        className={`notification-admin-card ${
+                          n.is_read
+                            ? "read"
+                            : "unread"
+                        }`}
+                        key={n.id}
+                        onClick={() =>
+                          markNotificationRead(
+                            n.id
+                          )
+                        }
+                      >
+                        <div className="notification-icon">
+                          {n.type ===
+                          "new_request"
+                            ? "🆕"
+                            : n.type ===
+                              "match_created"
+                            ? "🤝"
+                            : "🔔"}
+                        </div>
+
+                        <div>
+                          <strong>
+                            {n.title}
+                          </strong>
+
+                          <p>
+                            {n.message}
+                          </p>
+
+                          <small>
+                            {formatDate(
+                              n.created_at
+                            )}
+                          </small>
+                        </div>
+
+                        {!n.is_read && (
+                          <span className="unread-dot" />
+                        )}
+                      </div>
+                    )
+                  )}
+
+                  {notifications.length ===
+                    0 && (
+                    <div className="empty-state">
+                      <div>🔔</div>
+                      <h3>
+                        No notifications
+                      </h3>
+                    </div>
+                  )}
+                </div>
+              </section>
+            )}
+          </div>
+        </main>
+
+        {paymentFormOpen && (
+          <div className="modal-backdrop">
+            <div className="payment-modal">
+              <button
+                className="modal-close"
+                onClick={() =>
+                  setPaymentFormOpen(
+                    false
+                  )
+                }
+              >
+                ×
+              </button>
+
+              <h2>
+                💳 New Payment Query
+              </h2>
+
+              <p>
+                Payment details add karo.
+              </p>
+
+              <label>
+                Request
+                <select
+                  value={paymentRequestId}
+                  onChange={(e) =>
+                    setPaymentRequestId(
+                      e.target.value
+                    )
+                  }
+                >
+                  <option value="">
+                    Select request
+                  </option>
+
+                  {requests.map((r) => (
+                    <option
+                      key={r.id}
+                      value={r.id}
                     >
-                      💸 Mark Provider Payout Paid
-                    </button>
+                      {r.need ||
+                        r.id.slice(
+                          0,
+                          8
+                        )}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
-                    <button
-                      onClick={() =>
-                        adminRefund(
-                          selectedPayment
-                        )
-                      }
-                    >
-                      ↩️ Refund
-                    </button>
-                  </>
-                )}
+              <label>
+                Amount ₹
+                <input
+                  type="number"
+                  value={paymentAmount}
+                  onChange={(e) =>
+                    setPaymentAmount(
+                      e.target.value
+                    )
+                  }
+                  placeholder="500"
+                />
+              </label>
 
-                {selectedPayment.payment_status ===
-                  "pending" && (
-                  <button
-                    onClick={() =>
-                      adminPaymentStatus(
-                        selectedPayment.id,
-                        "failed"
-                      )
-                    }
-                  >
-                    ❌ Mark Failed
-                  </button>
-                )}
-              </div>
+              <label>
+                Payment Method
+                <select
+                  value={paymentMethod}
+                  onChange={(e) =>
+                    setPaymentMethod(
+                      e.target.value
+                    )
+                  }
+                >
+                  <option value="UPI">
+                    UPI
+                  </option>
+                  <option value="Cash">
+                    Cash
+                  </option>
+                  <option value="Bank Transfer">
+                    Bank Transfer
+                  </option>
+                  <option value="Other">
+                    Other
+                  </option>
+                </select>
+              </label>
+
+              <label>
+                Transaction ID / UTR
+                <input
+                  value={
+                    paymentTransactionId
+                  }
+                  onChange={(e) =>
+                    setPaymentTransactionId(
+                      e.target.value
+                    )
+                  }
+                  placeholder="UTR / Transaction ID"
+                />
+              </label>
+
+              <label>
+                Notes
+                <textarea
+                  value={paymentNotes}
+                  onChange={(e) =>
+                    setPaymentNotes(
+                      e.target.value
+                    )
+                  }
+                  placeholder="Payment related note..."
+                />
+              </label>
+
+              <button
+                className="primary-btn"
+                disabled={savingPayment}
+                onClick={createPayment}
+              >
+                {savingPayment
+                  ? "Saving..."
+                  : "💳 Create Payment"}
+              </button>
             </div>
           </div>
         )}
@@ -2864,30 +2599,25 @@ export default function App() {
     );
   }
 
-  /* =====================================================
-     CUSTOMER / PROVIDER
-     ===================================================== */
-
   return (
-    <div className="appShell">
-      <header className="topbar">
+    <div className="app">
+      <header className="user-topbar">
         <div className="brand">
-          <div className="brandMascot">
+          <div className="brand-logo">
             💡😎
           </div>
 
           <div>
-            <h1>JUGAAD</h1>
-
+            <strong>JUGAAD</strong>
             <small>
               Har zarurat ka jugaad 🇮🇳
             </small>
           </div>
         </div>
 
-        <div className="topActions">
+        <div className="top-actions">
           <button
-            className="notificationButton"
+            className="notification-button"
             onClick={() =>
               setShowNotifications(
                 !showNotifications
@@ -2895,136 +2625,286 @@ export default function App() {
             }
           >
             🔔
-
             {unreadCount > 0 && (
-              <span>{unreadCount}</span>
+              <span>
+                {unreadCount}
+              </span>
             )}
           </button>
+
+          <button
+            className="avatar-button"
+            onClick={() =>
+              setTab("profile")
+            }
+          >
+            👤
+          </button>
         </div>
-      </header>
 
-      {showNotifications && (
-        <div className="notificationDropdown">
-          <div className="notificationHead">
-            <h3>
-              Notifications 🔔
-            </h3>
+        {showNotifications && (
+          <div className="notification-dropdown">
+            <div className="dropdown-head">
+              <strong>
+                Notifications
+              </strong>
 
-            {unreadCount > 0 && (
-              <button
-                onClick={
-                  markAllNotificationsRead
-                }
-              >
-                Read all
-              </button>
-            )}
-          </div>
+              {unreadCount > 0 && (
+                <button
+                  onClick={
+                    markAllNotificationsRead
+                  }
+                >
+                  Read all
+                </button>
+              )}
+            </div>
 
-          {notifications.length === 0 ? (
-            <p className="notificationEmpty">
-              🔕 Abhi koi notification nahi.
-            </p>
-          ) : (
-            notifications
-              .slice(0, 20)
+            {notifications
+              .slice(0, 8)
               .map((n) => (
                 <div
-                  className={
-                    n.is_read
-                      ? "notificationItem read"
-                      : "notificationItem"
-                  }
                   key={n.id}
+                  className={`notification-item ${
+                    n.is_read
+                      ? ""
+                      : "new"
+                  }`}
                   onClick={() =>
                     markNotificationRead(
                       n.id
                     )
                   }
                 >
-                  <b>{n.title}</b>
-
+                  <strong>
+                    {n.title}
+                  </strong>
                   <p>{n.message}</p>
-
                   <small>
                     {formatDate(
                       n.created_at
                     )}
                   </small>
                 </div>
-              ))
-          )}
-        </div>
-      )}
+              ))}
 
-      <main className="mainContent">
+            {notifications.length ===
+              0 && (
+              <div className="notification-empty">
+                Abhi koi notification nahi 😴
+              </div>
+            )}
+          </div>
+        )}
+      </header>
+
+      <main className="user-main">
         {message && (
-          <div className="messageBox">
+          <div className="toast">
             {message}
+            <button
+              onClick={() =>
+                setMessage("")
+              }
+            >
+              ×
+            </button>
           </div>
         )}
 
         {tab === "home" && (
           <>
             <section className="hero">
-              <span className="heroEmoji">
-                😎
-              </span>
+              <div>
+                <span className="hero-badge">
+                  🇮🇳 Desi Help Network
+                </span>
 
-              <h2>
-                {isProvider
-                  ? "Aaj kaun sa kaam pakadna hai?"
-                  : "Jo chahiye, JUGAAD se milega"}
-              </h2>
+                <h1>
+                  Jo chahiye,
+                  <br />
+                  <span>
+                    JUGAAD se milega.
+                  </span>
+                </h1>
 
-              <p>
-                {isProvider
-                  ? "Customer ka kaam dekho aur JUGAAD laga do."
-                  : "Aapko kis cheez ki zarurat hai?"}
-              </p>
+                <p>
+                  Koi bhi genuine kaam ho —
+                  JUGAAD ko batao. Baaki hum
+                  jugaad lagayenge 😎
+                </p>
+              </div>
+
+              <div className="hero-mascot">
+                💡
+                <span>😎</span>
+              </div>
             </section>
 
-            {!isProvider && (
-              <section className="requestBox">
+            {isProvider ? (
+              <section className="request-box provider-box">
+                <div className="section-title">
+                  <div>
+                    <span>
+                      🧰 PROVIDER MODE
+                    </span>
+                    <h2>
+                      Kaunsa kaam pakadna hai?
+                    </h2>
+                  </div>
+                </div>
+
+                <div className="provider-job-list">
+                  {providerRequests
+                    .filter(
+                      (r) =>
+                        r.status ===
+                          STATUS.pending ||
+                        r.provider_id ===
+                          user.id
+                    )
+                    .map((r) => (
+                      <div
+                        className="job-card"
+                        key={r.id}
+                      >
+                        <div>
+                          <span className="category-chip">
+                            {r.category ||
+                              "Other"}
+                          </span>
+
+                          <h3>
+                            {r.need}
+                          </h3>
+
+                          <p>
+                            📍{" "}
+                            {r.location ||
+                              "Location not given"}
+                          </p>
+                        </div>
+
+                        <div>
+                          {r.provider_id ===
+                          user.id ? (
+                            <span
+                              className={`status status-${r.status}`}
+                            >
+                              {statusLabel(
+                                r.status
+                              )}
+                            </span>
+                          ) : (
+                            <button
+                              className="primary-small-btn"
+                              onClick={() =>
+                                acceptRequest(
+                                  r.id
+                                )
+                              }
+                            >
+                              🔥 Kaam Pakdo
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+
+                  {providerRequests.filter(
+                    (r) =>
+                      r.status ===
+                        STATUS.pending ||
+                      r.provider_id ===
+                        user.id
+                  ).length === 0 && (
+                    <div className="empty-state">
+                      <div>🛵</div>
+                      <h3>
+                        Abhi kaam nahi hai
+                      </h3>
+                      <p>
+                        Thoda chai piyo ☕,
+                        notification aayega.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </section>
+            ) : (
+              <section className="request-box">
+                <div className="section-title">
+                  <div>
+                    <span>
+                      JUGAAD START KARO
+                    </span>
+                    <h2>
+                      Aapko kis cheez ki
+                      zarurat hai?
+                    </h2>
+                  </div>
+
+                  <div className="voice-hint">
+                    🎙️
+                  </div>
+                </div>
+
                 <textarea
                   value={need}
                   onChange={(e) =>
                     setNeed(e.target.value)
                   }
-                  placeholder="Jaise: Ghar ka fan kharab hai, electrician chahiye..."
+                  placeholder="Jaise: Mujhe electrician chahiye, cooler kharab hai..."
                   rows={4}
                 />
 
-                <div className="categoryRow">
-                  {categories.map((c) => (
-                    <button
-                      key={c}
-                      className={
-                        category === c
-                          ? "category active"
-                          : "category"
-                      }
-                      onClick={() =>
-                        setCategory(c)
-                      }
-                    >
-                      {c}
-                    </button>
-                  ))}
+                <div className="category-row">
+                  {categories.map(
+                    (item) => (
+                      <button
+                        key={item}
+                        className={
+                          category ===
+                          item
+                            ? "selected"
+                            : ""
+                        }
+                        onClick={() =>
+                          setCategory(
+                            item
+                          )
+                        }
+                      >
+                        {item}
+                      </button>
+                    )
+                  )}
                 </div>
 
-                <input
-                  value={location}
-                  onChange={(e) =>
-                    setLocation(e.target.value)
-                  }
-                  placeholder="📍 Location — jaise Jhansi"
-                />
+                <div className="location-input">
+                  <span>📍</span>
+                  <input
+                    value={location}
+                    onChange={(e) =>
+                      setLocation(
+                        e.target.value
+                      )
+                    }
+                    placeholder={
+                      profile?.preferred_address ||
+                      "Location batao"
+                    }
+                  />
+                </div>
 
                 <button
-                  className="primaryButton"
-                  disabled={savingRequest}
-                  onClick={createRequest}
+                  className="primary-btn large"
+                  disabled={
+                    savingRequest
+                  }
+                  onClick={
+                    createRequest
+                  }
                 >
                   {savingRequest
                     ? "JUGAAD lag raha hai..."
@@ -3033,456 +2913,388 @@ export default function App() {
               </section>
             )}
 
-            {isProvider && (
-              <section>
-                <div className="sectionTitle">
+            <section className="services-section">
+              <div className="section-title">
+                <div>
+                  <span>
+                    POPULAR JUGAAD
+                  </span>
                   <h2>
-                    🧰 Available Kaam
+                    Log kya mangwa rahe hain?
                   </h2>
-
-                  <button
-                    onClick={loadRequests}
-                  >
-                    Refresh ↻
-                  </button>
                 </div>
 
-                {providerRequests.length ===
-                0 ? (
-                  <div className="emptyCard">
-                    😴 Abhi kaam nahi mila.
-                    <br />
-                    Thoda wait karo, JUGAAD dhoondh
-                    raha hai.
-                  </div>
-                ) : (
-                  <div className="requestGrid">
-                    {providerRequests.map(
-                      (request) => (
-                        <div
-                          className="requestCard"
-                          key={request.id}
-                        >
-                          <div className="cardTop">
-                            <span className="categoryTag">
-                              {request.category ||
-                                "General"}
-                            </span>
-
-                            <span className="statusPill">
-                              {statusLabel(
-                                request.status
-                              )}
-                            </span>
-                          </div>
-
-                          <h3>
-                            {request.need}
-                          </h3>
-
-                          <p>
-                            📍{" "}
-                            {request.location ||
-                              "Location not given"}
-                          </p>
-
-                          <small>
-                            {formatDate(
-                              request.created_at ||
-                                request.create_at
-                            )}
-                          </small>
-
-                          {request.status ===
-                            STATUS.pending && (
-                            <button
-                              className="primaryButton"
-                              onClick={() =>
-                                acceptRequest(
-                                  request.id
-                                )
-                              }
-                            >
-                              Kaam Lo 👍
-                            </button>
-                          )}
-
-                          {request.provider_id ===
-                            user.id &&
-                            request.status ===
-                              STATUS.accepted && (
-                              <button
-                                className="primaryButton"
-                                onClick={() =>
-                                  updateRequestStatus(
-                                    request.id,
-                                    STATUS.in_progress
-                                  )
-                                }
-                              >
-                                🚗 Main nikal raha hoon
-                              </button>
-                            )}
-
-                          {request.provider_id ===
-                            user.id &&
-                            request.status ===
-                              STATUS.in_progress && (
-                              <button
-                                className="primaryButton"
-                                onClick={() =>
-                                  updateRequestStatus(
-                                    request.id,
-                                    STATUS.completed
-                                  )
-                                }
-                              >
-                                ✅ Kaam Complete
-                              </button>
-                            )}
-                        </div>
-                      )
-                    )}
-                  </div>
-                )}
-              </section>
-            )}
-
-            <section>
-              <div className="sectionTitle">
-                <h2>
-                  {isProvider
-                    ? "Kaam categories"
-                    : "Popular JUGAAD"}
-                </h2>
+                <button
+                  className="text-btn"
+                  onClick={() =>
+                    setTab("explore")
+                  }
+                >
+                  Sab dekho →
+                </button>
               </div>
 
-              <div className="serviceGrid">
-                {services.map((service) => (
-                  <div
-                    className="serviceCard"
-                    key={service}
-                    onClick={() => {
-                      if (!isProvider) {
-                        setNeed(
-                          `${service} chahiye`
-                        );
-                        setTab("home");
+              <div className="service-grid">
+                {services.map(
+                  (service) => (
+                    <button
+                      className="service-card"
+                      key={service.name}
+                      onClick={() =>
+                        useService(
+                          service.name
+                        )
                       }
-                    }}
-                  >
-                    <div className="serviceIcon">
-                      {service ===
-                      "Electrician"
-                        ? "⚡"
-                        : service ===
-                          "Plumber"
-                        ? "🔧"
-                        : service ===
-                          "Mobile Repair"
-                        ? "📱"
-                        : service ===
-                          "AC/Cooler Repair"
-                        ? "❄️"
-                        : service ===
-                          "Home Cleaning"
-                        ? "🧹"
-                        : "🚚"}
-                    </div>
+                    >
+                      <span>
+                        {service.icon}
+                      </span>
 
-                    <b>{service}</b>
-                  </div>
-                ))}
+                      <strong>
+                        {service.name}
+                      </strong>
+
+                      <small>
+                        JUGAAD available
+                        🛵
+                      </small>
+                    </button>
+                  )
+                )}
               </div>
             </section>
           </>
         )}
 
-        {tab === "requests" && (
-          <section>
-            <div className="sectionTitle">
-              <div>
-                <h2>
-                  📋 Meri Requests
-                </h2>
-
-                <p>
-                  JUGAAD ka poora hisaab yahan.
-                </p>
-              </div>
-
-              <button
-                onClick={loadRequests}
-              >
-                Refresh ↻
-              </button>
+        {tab === "explore" && (
+          <section className="page-section">
+            <div className="page-heading">
+              <span>
+                🔎 EXPLORE
+              </span>
+              <h1>
+                Kis cheez ka JUGAAD chahiye?
+              </h1>
+              <p>
+                Category choose karo ya
+                seedha requirement likho.
+              </p>
             </div>
 
-            {customerRequests.length ===
-            0 ? (
-              <div className="emptyCard">
-                📭 Abhi koi request nahi.
-                <br />
-                Chalo ek JUGAAD karte hain 😎
-              </div>
-            ) : (
-              <div className="requestGrid">
-                {customerRequests.map(
-                  (request) => {
-                    const requestMatches =
-                      matches.filter(
-                        (m) =>
-                          m.request_id ===
-                          request.id
-                      );
+            <div className="explore-grid">
+              {services.map(
+                (service) => (
+                  <button
+                    className="explore-card"
+                    key={service.name}
+                    onClick={() =>
+                      useService(
+                        service.name
+                      )
+                    }
+                  >
+                    <span>
+                      {service.icon}
+                    </span>
+                    <h3>
+                      {service.name}
+                    </h3>
+                    <p>
+                      {service.category}
+                    </p>
+                    <strong>
+                      JUGAAD Karo →
+                    </strong>
+                  </button>
+                )
+              )}
+            </div>
+          </section>
+        )}
 
-                    return (
-                      <div
-                        className="requestCard"
-                        key={request.id}
-                      >
-                        <div className="cardTop">
-                          <span className="categoryTag">
-                            {request.category ||
-                              "General"}
-                          </span>
+        {tab === "requests" && (
+          <section className="page-section">
+            <div className="page-heading">
+              <span>
+                📋 MERI REQUESTS
+              </span>
+              <h1>
+                Aapke saare JUGAAD
+              </h1>
+              <p>
+                Kaam kaha tak pahucha,
+                yahin dikhega.
+              </p>
+            </div>
 
-                          <span className="statusPill">
-                            {statusLabel(
-                              request.status
-                            )}
-                          </span>
+            <div className="customer-request-list">
+              {customerRequests.map(
+                (r) => {
+                  const match =
+                    matches.find(
+                      (m) =>
+                        m.request_id ===
+                        r.id
+                    );
+
+                  const providerId =
+                    match?.provider_id ||
+                    match?.worker_id ||
+                    r.provider_id;
+
+                  const provider =
+                    providerId
+                      ? users.find(
+                          (u) =>
+                            u.id ===
+                            providerId
+                        )
+                      : null;
+
+                  return (
+                    <div
+                      className="customer-request-card"
+                      key={r.id}
+                    >
+                      <div className="request-card-head">
+                        <span className="category-chip">
+                          {r.category ||
+                            "Other"}
+                        </span>
+
+                        <span
+                          className={`status status-${r.status}`}
+                        >
+                          {statusLabel(
+                            r.status
+                          )}
+                        </span>
+                      </div>
+
+                      <h3>
+                        {r.need}
+                      </h3>
+
+                      <p>
+                        📍{" "}
+                        {r.location ||
+                          "Location not given"}
+                      </p>
+
+                      {provider && (
+                        <div className="provider-found">
+                          <div className="provider-avatar">
+                            👨‍🔧
+                          </div>
+
+                          <div>
+                            <small>
+                              JUGAAD mil gaya
+                            </small>
+                            <strong>
+                              {
+                                provider.full_name
+                              }
+                            </strong>
+                            <span>
+                              ⭐{" "}
+                              {provider.rating ??
+                                "New Provider"}
+                            </span>
+                          </div>
                         </div>
+                      )}
 
-                        <h3>
-                          {request.need}
-                        </h3>
-
-                        <p>
-                          📍{" "}
-                          {request.location ||
-                            "Location not given"}
-                        </p>
-
+                      <div className="request-card-bottom">
                         <small>
                           {formatDate(
-                            request.created_at ||
-                              request.create_at
+                            r.created_at ||
+                              r.create_at
                           )}
                         </small>
 
-                        {requestMatches.length >
-                          0 && (
-                          <div className="matchBox">
-                            <b>
-                              🤝 Provider mil gaya!
-                            </b>
-
-                            {requestMatches.map(
-                              (match) => (
-                                <div
-                                  key={match.id}
-                                >
-                                  <p>
-                                    🧰 Provider:
-                                    <br />
-                                    <span className="mono">
-                                      {userName(
-                                        match.provider_id ||
-                                          match.worker_id
-                                      )}
-                                    </span>
-                                  </p>
-
-                                  {match.quoted_amount !=
-                                    null && (
-                                    <p>
-                                      💰{" "}
-                                      {money(
-                                        match.quoted_amount
-                                      )}
-                                    </p>
-                                  )}
-                                </div>
-                              )
-                            )}
-                          </div>
-                        )}
-
-                        {request.status ===
-                          STATUS.accepted && (
+                        {r.status ===
+                          "accepted" && (
                           <button
-                            className="primaryButton"
                             onClick={() =>
                               updateRequestStatus(
-                                request.id,
-                                STATUS.in_progress
+                                r.id,
+                                "in_progress"
                               )
                             }
                           >
-                            🚗 Provider aa raha hai
+                            🛵 Kaam Start
                           </button>
                         )}
 
-                        {request.status ===
-                          STATUS.in_progress && (
+                        {r.status ===
+                          "in_progress" && (
                           <button
-                            className="primaryButton"
                             onClick={() =>
                               updateRequestStatus(
-                                request.id,
-                                STATUS.completed
+                                r.id,
+                                "completed"
                               )
                             }
                           >
-                            ✅ Kaam ho gaya
+                            ✅ Kaam Complete
                           </button>
                         )}
                       </div>
-                    );
-                  }
-                )}
-              </div>
-            )}
+                    </div>
+                  );
+                }
+              )}
+
+              {customerRequests.length ===
+                0 && (
+                <div className="empty-state">
+                  <div>💡</div>
+                  <h3>
+                    Abhi koi JUGAAD nahi
+                  </h3>
+                  <p>
+                    Pehla kaam batao, hum
+                    jugaad lagate hain 😎
+                  </p>
+
+                  <button
+                    className="primary-btn"
+                    onClick={() =>
+                      setTab("home")
+                    }
+                  >
+                    JUGAAD Karo →
+                  </button>
+                </div>
+              )}
+            </div>
           </section>
         )}
 
         {tab === "profile" && (
-          <section className="profilePage">
-            <div className="profileHeader">
-              <div className="bigAvatar">
+          <section className="page-section">
+            <div className="page-heading">
+              <span>
+                👤 PROFILE
+              </span>
+              <h1>
+                Apna JUGAAD profile
+              </h1>
+              <p>
+                Details save karo taaki
+                kaam aur smooth ho.
+              </p>
+            </div>
+
+            <div className="profile-card">
+              <div className="profile-avatar">
                 👤
               </div>
 
-              <div>
-                <h2>
-                  {profile?.full_name ||
-                    "JUGAAD User"}
-                </h2>
+              <div className="profile-form">
+                <label>
+                  Full Name
+                  <input
+                    value={profileName}
+                    onChange={(e) =>
+                      setProfileName(
+                        e.target.value
+                      )
+                    }
+                    placeholder="Aapka naam"
+                  />
+                </label>
 
-                <span className="roleBadge">
-                  {isProvider
-                    ? "🧰 Provider"
-                    : "🧑 Customer"}
-                </span>
+                <label>
+                  Phone
+                  <input
+                    value={profilePhone}
+                    onChange={(e) =>
+                      setProfilePhone(
+                        e.target.value
+                      )
+                    }
+                    placeholder="+91..."
+                  />
+                </label>
+
+                <label>
+                  Preferred Address
+                  <textarea
+                    value={profileAddress}
+                    onChange={(e) =>
+                      setProfileAddress(
+                        e.target.value
+                      )
+                    }
+                    placeholder="Aapka address"
+                  />
+                </label>
+
+                <div className="profile-role">
+                  <small>
+                    Current Mode
+                  </small>
+
+                  <strong>
+                    {role}
+                  </strong>
+                </div>
+
+                <button
+                  className="primary-btn"
+                  disabled={
+                    savingProfile
+                  }
+                  onClick={
+                    saveProfile
+                  }
+                >
+                  {savingProfile
+                    ? "Saving..."
+                    : "💾 Profile Save"}
+                </button>
+
+                {!isProvider && (
+                  <button
+                    className="secondary-btn"
+                    onClick={
+                      switchToProvider
+                    }
+                  >
+                    🧰 Provider Bano
+                  </button>
+                )}
+
+                {isProvider && (
+                  <button
+                    className="secondary-btn"
+                    onClick={
+                      switchToCustomer
+                    }
+                  >
+                    🙋 Customer Mode
+                  </button>
+                )}
+
+                <button
+                  className="danger-btn"
+                  onClick={signOut}
+                >
+                  ↪ Logout
+                </button>
               </div>
             </div>
-
-            <div className="profileForm">
-              <label>Naam</label>
-
-              <input
-                value={profileName}
-                onChange={(e) =>
-                  setProfileName(
-                    e.target.value
-                  )
-                }
-                placeholder="Aapka naam"
-              />
-
-              <label>Phone</label>
-
-              <input
-                value={profilePhone}
-                onChange={(e) =>
-                  setProfilePhone(
-                    e.target.value
-                  )
-                }
-                placeholder="Phone number"
-              />
-
-              <label>Address</label>
-
-              <textarea
-                value={profileAddress}
-                onChange={(e) =>
-                  setProfileAddress(
-                    e.target.value
-                  )
-                }
-                placeholder="Preferred address"
-              />
-
-              <button
-                className="primaryButton"
-                disabled={savingProfile}
-                onClick={saveProfile}
-              >
-                {savingProfile
-                  ? "Saving..."
-                  : "💾 Profile Save Karo"}
-              </button>
-            </div>
-
-            <div className="roleSwitch">
-              <h3>
-                JUGAAD par kya karna hai?
-              </h3>
-
-              <button
-                className={
-                  !isProvider
-                    ? "roleOption selected"
-                    : "roleOption"
-                }
-                onClick={
-                  switchToCustomer
-                }
-              >
-                🧑
-
-                <div>
-                  <b>
-                    Mujhe kaam chahiye
-                  </b>
-
-                  <small>
-                    Customer mode
-                  </small>
-                </div>
-              </button>
-
-              <button
-                className={
-                  isProvider
-                    ? "roleOption selected"
-                    : "roleOption"
-                }
-                onClick={
-                  switchToProvider
-                }
-              >
-                🧰
-
-                <div>
-                  <b>
-                    Mujhe kaam karna hai
-                  </b>
-
-                  <small>
-                    Provider mode
-                  </small>
-                </div>
-              </button>
-            </div>
-
-            <button
-              className="logoutFull"
-              onClick={logout}
-            >
-              🚪 Logout
-            </button>
           </section>
         )}
       </main>
 
-      <nav className="bottomNav">
+      <nav className="bottom-nav">
         <button
           className={
             tab === "home"
-              ? "navActive"
+              ? "active"
               : ""
           }
           onClick={() =>
@@ -3495,8 +3307,22 @@ export default function App() {
 
         <button
           className={
+            tab === "explore"
+              ? "active"
+              : ""
+          }
+          onClick={() =>
+            setTab("explore")
+          }
+        >
+          <span>🔎</span>
+          Explore
+        </button>
+
+        <button
+          className={
             tab === "requests"
-              ? "navActive"
+              ? "active"
               : ""
           }
           onClick={() =>
@@ -3510,7 +3336,7 @@ export default function App() {
         <button
           className={
             tab === "profile"
-              ? "navActive"
+              ? "active"
               : ""
           }
           onClick={() =>
