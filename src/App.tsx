@@ -1402,7 +1402,162 @@ export default function App() {
 
   /* ---------------- LOGIN ---------------- */
 
+  const isAdminLoginPage =
+    new URLSearchParams(window.location.search).get("admin") === "1";
+
   if (!user) {
+    const startGoogleLogin = async () => {
+      const { error } =
+        await supabase.auth.signInWithOAuth({
+          provider: "google",
+          options: {
+            redirectTo: window.location.origin,
+          },
+        });
+
+      if (error) {
+        setMessage(
+          `❌ Login nahi hua: ${error.message}`
+        );
+      }
+    };
+
+    if (isAdminLoginPage) {
+      return (
+        <div
+          className="auth-screen"
+          style={{
+            minHeight: "100vh",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "24px",
+            background: "#111111",
+          }}
+        >
+          <div
+            className="auth-card"
+            style={{
+              width: "100%",
+              maxWidth: 430,
+              background: "#ffffff",
+              borderRadius: 30,
+              padding: "34px 26px 28px",
+              textAlign: "center",
+              border: "4px solid #FFD600",
+              boxShadow: "0 18px 50px rgba(0,0,0,.35)",
+            }}
+          >
+            <div
+              style={{
+                width: 88,
+                height: 88,
+                margin: "0 auto 14px",
+                borderRadius: "50%",
+                background: "#FFD600",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 48,
+                boxShadow: "0 8px 0 #111111",
+              }}
+            >
+              💡😎
+            </div>
+
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 7,
+                background: "#111111",
+                color: "#FFD600",
+                borderRadius: 999,
+                padding: "7px 13px",
+                fontWeight: 800,
+                fontSize: 12,
+                marginBottom: 14,
+              }}
+            >
+              🔐 ADMIN ACCESS
+            </div>
+
+            <h1
+              style={{
+                margin: "4px 0 5px",
+                fontSize: 38,
+                fontWeight: 950,
+                letterSpacing: -1.5,
+                color: "#111111",
+              }}
+            >
+              JUGAAD
+            </h1>
+
+            <p
+              style={{
+                margin: "0 0 22px",
+                fontWeight: 700,
+                color: "#555",
+              }}
+            >
+              Har zarurat ka jugaad 🇮🇳
+            </p>
+
+            <div
+              style={{
+                background: "#FFF7C2",
+                borderRadius: 18,
+                padding: "15px 14px",
+                marginBottom: 18,
+                color: "#111111",
+                fontWeight: 700,
+                lineHeight: 1.45,
+              }}
+            >
+              👋 Admin ji, JUGAAD sambhalne ka time!
+              <br />
+              <span style={{ fontWeight: 600, fontSize: 13 }}>
+                Sirf authorised admin account se continue karein.
+              </span>
+            </div>
+
+            <button
+              className="primary-btn"
+              onClick={startGoogleLogin}
+              style={{
+                width: "100%",
+                minHeight: 54,
+                borderRadius: 16,
+                fontSize: 16,
+                fontWeight: 900,
+                cursor: "pointer",
+              }}
+            >
+              🔐 Admin Login with Google →
+            </button>
+
+            <p
+              style={{
+                margin: "16px 0 0",
+                fontSize: 12,
+                color: "#777",
+              }}
+            >
+              Customer/Provider account se login karne par
+              admin panel nahi milega. 😎
+            </p>
+
+            {message && (
+              <div className="toast" style={{ marginTop: 16 }}>
+                {message}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="auth-screen">
         <div className="auth-card">
@@ -1418,29 +1573,7 @@ export default function App() {
 
           <button
             className="primary-btn"
-            onClick={async () => {
-              const {
-                error,
-              } =
-                await supabase.auth.signInWithOAuth(
-                  {
-                    provider:
-                      "google",
-                    options: {
-                      redirectTo:
-                        window
-                          .location
-                          .origin,
-                    },
-                  }
-                );
-
-              if (error) {
-                setMessage(
-                  `❌ Login nahi hua: ${error.message}`
-                );
-              }
-            }}
+            onClick={startGoogleLogin}
           >
             🔐 Google se Login →
           </button>
