@@ -22,6 +22,8 @@ type Profile = {
   is_active: boolean | null;
   rating: number | null;
   completed_job: number | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 type RequestRow = {
@@ -60,6 +62,30 @@ type NotificationRow = {
   created_at: string;
 };
 
+type PaymentRow = {
+  id: string;
+  request_id?: string | null;
+  match_id?: string | null;
+  customer_id?: string | null;
+  provider_id?: string | null;
+  amount: number;
+  platform_fee: number;
+  provider_amount: number;
+  payment_method?: string | null;
+  payment_gateway?: string | null;
+  transaction_id?: string | null;
+  payment_status: string;
+  refund_status: string;
+  refund_amount: number;
+  payout_status: string;
+  paid_at?: string | null;
+  refunded_at?: string | null;
+  payout_at?: string | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at?: string | null;
+};
+
 const STATUS = {
   pending: "pending",
   accepted: "accepted",
@@ -88,12 +114,25 @@ const services = [
 
 function formatDate(value?: string | null) {
   if (!value) return "";
+
   return new Date(value).toLocaleString("en-IN", {
     day: "2-digit",
     month: "short",
+    year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function money(value?: number | null) {
+  return `₹${Number(value || 0).toLocaleString("en-IN")}`;
+}
+
+function shortId(value?: string | null) {
+  if (!value) return "—";
+  return value.length > 12
+    ? `${value.slice(0, 8)}...${value.slice(-4)}`
+    : value;
 }
 
 function statusLabel(status?: string | null) {
@@ -113,6 +152,44 @@ function statusLabel(status?: string | null) {
   }
 }
 
+function paymentStatusLabel(status?: string | null) {
+  switch (status) {
+    case "paid":
+      return "✅ Paid";
+    case "processing":
+      return "🔄 Processing";
+    case "pending":
+      return "⏳ Pending";
+    case "failed":
+      return "❌ Failed";
+    case "cancelled":
+      return "🚫 Cancelled";
+    case "refunded":
+      return "↩️ Refunded";
+    case "partially_refunded":
+      return "↩️ Partial Refund";
+    default:
+      return status || "Unknown";
+  }
+}
+
+function roleLabel(role?: string | null) {
+  switch (String(role || "").toLowerCase()) {
+    case "admin":
+      return "👑 Admin";
+    case "provider":
+      return "🧰 Provider";
+    case "worker":
+      return "🧰 Worker";
+    case "student":
+      return "🎓 Student";
+    case "government":
+      return "🏛️ Government";
+    default:
+      return "🧑 Customer";
+  }
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -127,13 +204,26 @@ export default function App() {
   const [requests, setRequests] = useState<RequestRow[]>([]);
   const [matches, setMatches] = useState<MatchRow[]>([]);
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [payments, setPayments] = useState<PaymentRow[]>([]);
 
   const [showNotifications, setShowNotifications] = useState(false);
   const [message, setMessage] = useState("");
+
   const [profileName, setProfileName] = useState("");
   const [profilePhone, setProfilePhone] = useState("");
   const [profileAddress, setProfileAddress] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
+
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminSearch, setAdminSearch] = useState("");
+  const [adminFilter, setAdminFilter] = useState("all");
+  const [selectedRequest, setSelectedRequest] =
+    useState<RequestRow | null>(null);
+  const [selectedMatch, setSelectedMatch] =
+    useState<MatchRow | null>(null);
+  const [selectedPayment, setSelectedPayment] =
+    useState<PaymentRow | null>(null);
 
   const role = String(profile?.role || "customer").toLowerCase();
 
@@ -146,7 +236,8 @@ export default function App() {
     role === "worker" ||
     role === "service_provider";
 
-  const unreadCount = notifications.filter((n) => !n.is_read).length;
+  const unreadCount =
+    notifications.filter((n) => !n.is_read).length;
 
   useEffect(() => {
     init();
@@ -157,6 +248,26 @@ export default function App() {
 
     loadProfile(user.id);
     loadNotifications(user.id);
+
+    const notificationChannel = supabase
+      .channel(`notifications-${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "notifications",
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          loadNotifications(user.id);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(notificationChannel);
+    };
   }, [user]);
 
   useEffect(() => {
@@ -169,6 +280,77 @@ export default function App() {
       loadMatches();
     }
   }, [user, profile]);
+
+  useEffect(() => {
+    if (!user || !profile || !isAdmin) return;
+
+    const requestsChannel = supabase
+      .channel("admin-requests-live")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "requests",
+        },
+        () => {
+          loadAdminData();
+        }
+      )
+      .subscribe();
+
+    const matchesChannel = supabase
+      .channel("admin-matches-live")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "matches",
+        },
+        () => {
+          loadAdminData();
+        }
+      )
+      .subscribe();
+
+    const paymentsChannel = supabase
+      .channel("admin-payments-live")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "payments",
+        },
+        () => {
+          loadAdminData();
+        }
+      )
+      .subscribe();
+
+    const profilesChannel = supabase
+      .channel("admin-profiles-live")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "profiles",
+        },
+        () => {
+          loadAdminData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(requestsChannel);
+      supabase.removeChannel(matchesChannel);
+      supabase.removeChannel(paymentsChannel);
+      supabase.removeChannel(profilesChannel);
+    };
+  }, [user, profile, isAdmin]);
 
   async function init() {
     setLoading(true);
@@ -200,11 +382,15 @@ export default function App() {
 
   async function logout() {
     await supabase.auth.signOut();
+
     setUser(null);
     setProfile(null);
     setRequests([]);
     setMatches([]);
     setNotifications([]);
+    setProfiles([]);
+    setPayments([]);
+    setTab("home");
   }
 
   async function loadProfile(userId: string) {
@@ -220,6 +406,7 @@ export default function App() {
     }
 
     setProfile(data);
+
     setProfileName(data?.full_name || "");
     setProfilePhone(data?.phone || "");
     setProfileAddress(data?.preferred_address || "");
@@ -246,6 +433,7 @@ export default function App() {
 
     if (error) {
       console.error(error);
+      setMessage(error.message);
       return;
     }
 
@@ -269,7 +457,10 @@ export default function App() {
 
     const { data, error } = await supabase
       .from("matches")
-      .select("*");
+      .select("*")
+      .order("created_at", {
+        ascending: false,
+      });
 
     if (error) {
       console.error(error);
@@ -284,7 +475,9 @@ export default function App() {
       .from("notifications")
       .select("*")
       .eq("user_id", userId)
-      .order("created_at", { ascending: false });
+      .order("created_at", {
+        ascending: false,
+      });
 
     if (error) {
       console.error(error);
@@ -295,10 +488,70 @@ export default function App() {
   }
 
   async function loadAdminData() {
-    await Promise.all([
-      loadRequests(),
-      loadMatches(),
+    if (!user || !isAdmin) return;
+
+    setAdminLoading(true);
+
+    const [
+      requestResult,
+      matchResult,
+      profileResult,
+      paymentResult,
+    ] = await Promise.all([
+      supabase
+        .from("requests")
+        .select("*")
+        .order("created_at", {
+          ascending: false,
+        }),
+
+      supabase
+        .from("matches")
+        .select("*")
+        .order("created_at", {
+          ascending: false,
+        }),
+
+      supabase
+        .from("profiles")
+        .select("*")
+        .order("created_at", {
+          ascending: false,
+        }),
+
+      supabase
+        .from("payments")
+        .select("*")
+        .order("created_at", {
+          ascending: false,
+        }),
     ]);
+
+    if (requestResult.error) {
+      console.error(requestResult.error);
+    } else {
+      setRequests(requestResult.data || []);
+    }
+
+    if (matchResult.error) {
+      console.error(matchResult.error);
+    } else {
+      setMatches(matchResult.data || []);
+    }
+
+    if (profileResult.error) {
+      console.error(profileResult.error);
+    } else {
+      setProfiles(profileResult.data || []);
+    }
+
+    if (paymentResult.error) {
+      console.error(paymentResult.error);
+    } else {
+      setPayments(paymentResult.data || []);
+    }
+
+    setAdminLoading(false);
   }
 
   async function createRequest() {
@@ -310,7 +563,9 @@ export default function App() {
     const cleanNeed = need.trim();
 
     if (!cleanNeed) {
-      setMessage("Bhai, pehle batao kya jugaad chahiye 😄");
+      setMessage(
+        "Bhai, pehle batao kya jugaad chahiye 😄"
+      );
       return;
     }
 
@@ -322,7 +577,10 @@ export default function App() {
       .insert({
         user_id: user.id,
         need: cleanNeed,
-        category: category === "Sab" ? null : category,
+        category:
+          category === "Sab"
+            ? null
+            : category,
         location:
           location.trim() ||
           profile?.preferred_address ||
@@ -341,23 +599,29 @@ export default function App() {
     setNeed("");
     setLocation("");
     setCategory("Sab");
-    setMessage("🎉 JUGAAD nikal pada! Kaam dhoondh raha hai.");
+
+    setMessage(
+      "🎉 JUGAAD nikal pada! Kaam dhoondh raha hai."
+    );
 
     await loadRequests();
     setTab("requests");
   }
 
-  async function acceptRequest(requestId: string) {
+  async function acceptRequest(
+    requestId: string
+  ) {
     if (!user) return;
 
     setMessage("");
 
-    const { data: existing, error: matchError } = await supabase
-      .from("matches")
-      .select("id")
-      .eq("request_id", requestId)
-      .eq("provider_id", user.id)
-      .maybeSingle();
+    const { data: existing, error: matchError } =
+      await supabase
+        .from("matches")
+        .select("id")
+        .eq("request_id", requestId)
+        .eq("provider_id", user.id)
+        .maybeSingle();
 
     if (matchError) {
       setMessage(matchError.message);
@@ -376,25 +640,32 @@ export default function App() {
 
       if (error) {
         console.error(error);
-        setMessage("Match create nahi hua: " + error.message);
+        setMessage(
+          "Match create nahi hua: " +
+            error.message
+        );
         return;
       }
     }
 
-    const { error: requestError } = await supabase
-      .from("requests")
-      .update({
-        status: STATUS.accepted,
-        provider_id: user.id,
-      })
-      .eq("id", requestId);
+    const { error: requestError } =
+      await supabase
+        .from("requests")
+        .update({
+          status: STATUS.accepted,
+          provider_id: user.id,
+        })
+        .eq("id", requestId);
 
     if (requestError) {
       setMessage(requestError.message);
       return;
     }
 
-    setMessage("🔥 Kaam pakad liya! Customer ko bata diya.");
+    setMessage(
+      "🔥 Kaam pakad liya! Customer ko bata diya."
+    );
+
     await loadRequests();
     await loadMatches();
   }
@@ -420,6 +691,55 @@ export default function App() {
     );
 
     await loadRequests();
+
+    if (isAdmin) {
+      await loadAdminData();
+    }
+  }
+
+  async function adminUpdateRequestStatus(
+    requestId: string,
+    status: string
+  ) {
+    const { error } = await supabase
+      .from("requests")
+      .update({ status })
+      .eq("id", requestId);
+
+    if (error) {
+      setMessage(
+        "Request update nahi hua: " +
+          error.message
+      );
+      return;
+    }
+
+    setMessage(
+      `📋 Request ${status} kar di gayi.`
+    );
+
+    await loadAdminData();
+  }
+
+  async function adminUpdateUser(
+    profileId: string,
+    changes: Partial<Profile>
+  ) {
+    const { error } = await supabase
+      .from("profiles")
+      .update(changes)
+      .eq("id", profileId);
+
+    if (error) {
+      setMessage(
+        "User update nahi hua: " +
+          error.message
+      );
+      return;
+    }
+
+    setMessage("👤 User update ho gaya.");
+    await loadAdminData();
   }
 
   async function saveProfile() {
@@ -432,8 +752,10 @@ export default function App() {
       .from("profiles")
       .upsert({
         id: user.id,
-        full_name: profileName.trim() || null,
-        phone: profilePhone.trim() || null,
+        full_name:
+          profileName.trim() || null,
+        phone:
+          profilePhone.trim() || null,
         preferred_address:
           profileAddress.trim() || null,
       });
@@ -467,7 +789,10 @@ export default function App() {
 
     await loadProfile(user.id);
     setTab("home");
-    setMessage("🧰 Provider mode ON! Ab kaam pakdo.");
+
+    setMessage(
+      "🧰 Provider mode ON! Ab kaam pakdo."
+    );
   }
 
   async function switchToCustomer() {
@@ -487,13 +812,18 @@ export default function App() {
 
     await loadProfile(user.id);
     setTab("home");
+
     setMessage("🧑 Customer mode ON!");
   }
 
-  async function markNotificationRead(id: string) {
+  async function markNotificationRead(
+    id: string
+  ) {
     const { error } = await supabase
       .from("notifications")
-      .update({ is_read: true })
+      .update({
+        is_read: true,
+      })
       .eq("id", id);
 
     if (error) {
@@ -511,7 +841,9 @@ export default function App() {
 
     const { error } = await supabase
       .from("notifications")
-      .update({ is_read: true })
+      .update({
+        is_read: true,
+      })
       .eq("user_id", user.id)
       .eq("is_read", false);
 
@@ -521,6 +853,112 @@ export default function App() {
     }
 
     await loadNotifications(user.id);
+  }
+
+  async function adminPaymentStatus(
+    paymentId: string,
+    status: string
+  ) {
+    const { error } = await supabase.rpc(
+      "admin_update_payment_status",
+      {
+        p_payment_id: paymentId,
+        p_status: status,
+        p_notes: null,
+      }
+    );
+
+    if (error) {
+      setMessage(
+        "Payment update failed: " +
+          error.message
+      );
+      return;
+    }
+
+    setMessage(
+      `💳 Payment ${status} kar di gayi.`
+    );
+
+    setSelectedPayment(null);
+    await loadAdminData();
+  }
+
+  async function adminRefund(
+    payment: PaymentRow
+  ) {
+    const amount = window.prompt(
+      `Refund amount enter karo. Maximum ${money(
+        payment.amount
+      )}`,
+      String(payment.amount)
+    );
+
+    if (amount === null) return;
+
+    const refundAmount = Number(amount);
+
+    if (
+      !Number.isFinite(refundAmount) ||
+      refundAmount <= 0 ||
+      refundAmount > Number(payment.amount)
+    ) {
+      setMessage("❌ Invalid refund amount.");
+      return;
+    }
+
+    const { error } = await supabase.rpc(
+      "admin_refund_payment",
+      {
+        p_payment_id: payment.id,
+        p_refund_amount: refundAmount,
+        p_notes: "Admin refund",
+      }
+    );
+
+    if (error) {
+      setMessage(
+        "Refund failed: " +
+          error.message
+      );
+      return;
+    }
+
+    setMessage(
+      `↩️ ${money(
+        refundAmount
+      )} refund mark kar diya.`
+    );
+
+    setSelectedPayment(null);
+    await loadAdminData();
+  }
+
+  async function adminPayout(
+    paymentId: string,
+    status: string
+  ) {
+    const { error } = await supabase.rpc(
+      "admin_update_payout",
+      {
+        p_payment_id: paymentId,
+        p_payout_status: status,
+      }
+    );
+
+    if (error) {
+      setMessage(
+        "Payout update failed: " +
+          error.message
+      );
+      return;
+    }
+
+    setMessage(
+      `💸 Provider payout ${status}.`
+    );
+
+    await loadAdminData();
   }
 
   const customerRequests = useMemo(() => {
@@ -535,19 +973,210 @@ export default function App() {
     return requests;
   }, [requests]);
 
-  const adminStats = {
-    users: 0,
-    requests: requests.length,
-    matches: matches.length,
-    notifications: notifications.length,
-  };
+  const adminStats = useMemo(() => {
+    const customers = profiles.filter(
+      (p) =>
+        String(p.role).toLowerCase() ===
+        "customer"
+    ).length;
+
+    const providers = profiles.filter(
+      (p) =>
+        ["provider", "worker", "service_provider"].includes(
+          String(p.role).toLowerCase()
+        )
+    ).length;
+
+    const activeUsers = profiles.filter(
+      (p) => p.is_active === true
+    ).length;
+
+    const pendingRequests =
+      requests.filter(
+        (r) => r.status === STATUS.pending
+      ).length;
+
+    const acceptedRequests =
+      requests.filter(
+        (r) => r.status === STATUS.accepted
+      ).length;
+
+    const progressRequests =
+      requests.filter(
+        (r) =>
+          r.status === STATUS.in_progress
+      ).length;
+
+    const completedRequests =
+      requests.filter(
+        (r) => r.status === STATUS.completed
+      ).length;
+
+    const paidPayments =
+      payments.filter(
+        (p) =>
+          p.payment_status === "paid"
+      );
+
+    const totalCollected =
+      paidPayments.reduce(
+        (sum, p) =>
+          sum + Number(p.amount || 0),
+        0
+      );
+
+    const platformEarnings =
+      paidPayments.reduce(
+        (sum, p) =>
+          sum +
+          Number(p.platform_fee || 0),
+        0
+      );
+
+    const providerPayable =
+      paidPayments.reduce(
+        (sum, p) =>
+          sum +
+          Number(
+            p.provider_amount || 0
+          ),
+        0
+      );
+
+    return {
+      users: profiles.length,
+      customers,
+      providers,
+      activeUsers,
+      requests: requests.length,
+      pendingRequests,
+      acceptedRequests,
+      progressRequests,
+      completedRequests,
+      matches: matches.length,
+      notifications: notifications.length,
+      unreadNotifications: unreadCount,
+      payments: payments.length,
+      paidPayments: paidPayments.length,
+      totalCollected,
+      platformEarnings,
+      providerPayable,
+    };
+  }, [
+    profiles,
+    requests,
+    matches,
+    notifications,
+    payments,
+    unreadCount,
+  ]);
+
+  const filteredUsers = useMemo(() => {
+    const search =
+      adminSearch.trim().toLowerCase();
+
+    return profiles.filter((p) => {
+      const roleMatch =
+        adminFilter === "all" ||
+        String(p.role || "").toLowerCase() ===
+          adminFilter;
+
+      if (!roleMatch) return false;
+
+      if (!search) return true;
+
+      return (
+        String(p.full_name || "")
+          .toLowerCase()
+          .includes(search) ||
+        String(p.phone || "")
+          .toLowerCase()
+          .includes(search) ||
+        String(p.role || "")
+          .toLowerCase()
+          .includes(search) ||
+        p.id.toLowerCase().includes(search)
+      );
+    });
+  }, [
+    profiles,
+    adminSearch,
+    adminFilter,
+  ]);
+
+  const filteredRequests = useMemo(() => {
+    const search =
+      adminSearch.trim().toLowerCase();
+
+    return requests.filter((r) => {
+      if (!search) return true;
+
+      return (
+        String(r.need || "")
+          .toLowerCase()
+          .includes(search) ||
+        String(r.category || "")
+          .toLowerCase()
+          .includes(search) ||
+        String(r.location || "")
+          .toLowerCase()
+          .includes(search) ||
+        String(r.status || "")
+          .toLowerCase()
+          .includes(search)
+      );
+    });
+  }, [requests, adminSearch]);
+
+  const filteredPayments = useMemo(() => {
+    const search =
+      adminSearch.trim().toLowerCase();
+
+    return payments.filter((p) => {
+      if (!search) return true;
+
+      return (
+        String(p.transaction_id || "")
+          .toLowerCase()
+          .includes(search) ||
+        String(p.payment_status || "")
+          .toLowerCase()
+          .includes(search) ||
+        String(p.payment_method || "")
+          .toLowerCase()
+          .includes(search) ||
+        String(p.customer_id || "")
+          .toLowerCase()
+          .includes(search) ||
+        String(p.provider_id || "")
+          .toLowerCase()
+          .includes(search)
+      );
+    });
+  }, [payments, adminSearch]);
+
+  function userName(id?: string | null) {
+    if (!id) return "Not assigned";
+
+    const found = profiles.find(
+      (p) => p.id === id
+    );
+
+    return (
+      found?.full_name ||
+      found?.phone ||
+      shortId(id)
+    );
+  }
 
   if (loading) {
     return (
       <div className="loadingScreen">
         <div className="mascot">💡😎</div>
         <h2>JUGAAD lag raha hai...</h2>
-        <p>Thoda ruk bhai, jugaad start ho raha hai 😄</p>
+        <p>
+          Thoda ruk bhai, jugaad start ho raha hai 😄
+        </p>
       </div>
     );
   }
@@ -555,7 +1184,9 @@ export default function App() {
   if (!user) {
     return (
       <div className="loginScreen">
-        <div className="logoBox">💡😎</div>
+        <div className="logoBox">
+          💡😎
+        </div>
 
         <h1>JUGAAD</h1>
 
@@ -563,7 +1194,9 @@ export default function App() {
           Har zarurat ka jugaad 🇮🇳
         </p>
 
-        <h2>Jo chahiye, JUGAAD se milega</h2>
+        <h2>
+          Jo chahiye, JUGAAD se milega
+        </h2>
 
         <p>
           Gaon ho ya metro, kaam chhota ho ya bada —
@@ -580,76 +1213,126 @@ export default function App() {
     );
   }
 
+  /* =====================================================
+     ADMIN
+     ===================================================== */
+
   if (isAdmin) {
+    const adminTitle =
+      tab === "admin"
+        ? "Dashboard"
+        : tab === "adminUsers"
+        ? "Users"
+        : tab === "adminRequests"
+        ? "Requests"
+        : tab === "adminMatches"
+        ? "Matches"
+        : tab === "adminPayments"
+        ? "Payments"
+        : "Notifications";
+
     return (
       <div className="adminShell">
         <aside className="adminSidebar">
           <div className="adminLogo">
-            💡😎
-            <span>JUGAAD</span>
+            <span>💡😎</span>
+            <b>JUGAAD</b>
           </div>
 
           <div className="adminTitle">
-            Admin Dashboard
+            Admin Control Room
           </div>
 
           <button
-            className="sideButton active"
-            onClick={() => setTab("admin")}
+            className={
+              tab === "admin"
+                ? "sideButton active"
+                : "sideButton"
+            }
+            onClick={() => {
+              setTab("admin");
+              setAdminSearch("");
+            }}
           >
             📊 Dashboard
           </button>
 
           <button
-            className="sideButton"
-            onClick={() => setTab("adminRequests")}
+            className={
+              tab === "adminUsers"
+                ? "sideButton active"
+                : "sideButton"
+            }
+            onClick={() => {
+              setTab("adminUsers");
+              setAdminSearch("");
+            }}
+          >
+            👥 Users
+          </button>
+
+          <button
+            className={
+              tab === "adminRequests"
+                ? "sideButton active"
+                : "sideButton"
+            }
+            onClick={() => {
+              setTab("adminRequests");
+              setAdminSearch("");
+            }}
           >
             📋 Requests
           </button>
 
           <button
-            className="sideButton"
-            onClick={() => setTab("adminMatches")}
+            className={
+              tab === "adminMatches"
+                ? "sideButton active"
+                : "sideButton"
+            }
+            onClick={() => {
+              setTab("adminMatches");
+              setAdminSearch("");
+            }}
           >
             🤝 Matches
           </button>
 
           <button
-            className="sideButton"
-            onClick={() => setTab("adminNotifications")}
+            className={
+              tab === "adminPayments"
+                ? "sideButton active"
+                : "sideButton"
+            }
+            onClick={() => {
+              setTab("adminPayments");
+              setAdminSearch("");
+            }}
+          >
+            💰 Payments
+          </button>
+
+          <button
+            className={
+              tab === "adminNotifications"
+                ? "sideButton active"
+                : "sideButton"
+            }
+            onClick={() =>
+              setTab("adminNotifications")
+            }
           >
             🔔 Notifications
+            {unreadCount > 0 && (
+              <span className="sideBadge">
+                {unreadCount}
+              </span>
+            )}
           </button>
 
           <div className="sidebarBottom">
-            <button
-              className="logoutButton"
-              onClick={logout}
-            >
-              Logout
-            </button>
-          </div>
-        </aside>
-
-        <main className="adminMain">
-          <div className="adminTopbar">
-            <div>
-              <h1>
-                {tab === "admin"
-                  ? "Dashboard"
-                  : tab === "adminRequests"
-                  ? "Requests"
-                  : tab === "adminMatches"
-                  ? "Matches"
-                  : "Notifications"}
-              </h1>
-
-              <p>
-                JUGAAD control room 😎
-              </p>
-            </div>
-
-            <div className="adminUser">
+            <div className="adminSidebarProfile">
               <div className="avatar">
                 👨‍💼
               </div>
@@ -660,8 +1343,65 @@ export default function App() {
                     user.email ||
                     "Admin"}
                 </b>
-                <small>Administrator</small>
+
+                <small>
+                  Administrator
+                </small>
               </div>
+            </div>
+
+            <button
+              className="logoutButton"
+              onClick={logout}
+            >
+              🚪 Logout
+            </button>
+          </div>
+        </aside>
+
+        <main className="adminMain">
+          <div className="adminTopbar">
+            <div>
+              <h1>{adminTitle}</h1>
+              <p>
+                JUGAAD control room 😎
+              </p>
+            </div>
+
+            <div className="adminTopActions">
+              <button
+                className="refreshAdmin"
+                onClick={loadAdminData}
+              >
+                {adminLoading
+                  ? "Refreshing..."
+                  : "↻ Refresh"}
+              </button>
+
+              <button
+                className="adminUser"
+                onClick={() =>
+                  setTab("adminNotifications")
+                }
+              >
+                <div className="avatar">
+                  👨‍💼
+                </div>
+
+                <div>
+                  <b>
+                    {profile?.full_name ||
+                      user.email ||
+                      "Admin"}
+                  </b>
+
+                  <small>
+                    {unreadCount > 0
+                      ? `🔔 ${unreadCount} new`
+                      : "Administrator"}
+                  </small>
+                </div>
+              </button>
             </div>
           </div>
 
@@ -671,38 +1411,90 @@ export default function App() {
             </div>
           )}
 
+          {/* ================= DASHBOARD ================= */}
+
           {tab === "admin" && (
             <>
               <div className="statsGrid">
                 <div className="statCard">
                   <span>👥</span>
-                  <small>Users</small>
+                  <small>Total Users</small>
                   <strong>
                     {adminStats.users}
                   </strong>
+                  <em>
+                    {adminStats.activeUsers} active
+                  </em>
                 </div>
 
                 <div className="statCard">
                   <span>📋</span>
-                  <small>Requests</small>
+                  <small>Total Requests</small>
                   <strong>
                     {adminStats.requests}
                   </strong>
+                  <em>
+                    {adminStats.pendingRequests} pending
+                  </em>
                 </div>
 
                 <div className="statCard">
                   <span>🤝</span>
-                  <small>Matches</small>
+                  <small>Total Matches</small>
                   <strong>
                     {adminStats.matches}
+                  </strong>
+                  <em>
+                    {adminStats.acceptedRequests} accepted
+                  </em>
+                </div>
+
+                <div className="statCard">
+                  <span>💰</span>
+                  <small>Total Collected</small>
+                  <strong>
+                    {money(
+                      adminStats.totalCollected
+                    )}
+                  </strong>
+                  <em>
+                    {adminStats.paidPayments} paid
+                  </em>
+                </div>
+              </div>
+
+              <div className="statsGrid">
+                <div className="statCard">
+                  <span>🧑</span>
+                  <small>Customers</small>
+                  <strong>
+                    {adminStats.customers}
+                  </strong>
+                </div>
+
+                <div className="statCard">
+                  <span>🧰</span>
+                  <small>Providers</small>
+                  <strong>
+                    {adminStats.providers}
                   </strong>
                 </div>
 
                 <div className="statCard">
                   <span>🔔</span>
-                  <small>Notifications</small>
+                  <small>Unread Alerts</small>
                   <strong>
-                    {adminStats.notifications}
+                    {adminStats.unreadNotifications}
+                  </strong>
+                </div>
+
+                <div className="statCard">
+                  <span>💸</span>
+                  <small>JUGAAD Earnings</small>
+                  <strong>
+                    {money(
+                      adminStats.platformEarnings
+                    )}
                   </strong>
                 </div>
               </div>
@@ -710,8 +1502,92 @@ export default function App() {
               <section className="adminPanel">
                 <div className="panelHeader">
                   <div>
-                    <h2>Recent Requests</h2>
-                    <p>Latest customer requirements</p>
+                    <h2>⚡ Live Overview</h2>
+                    <p>
+                      Abhi JUGAAD mein kya chal raha hai
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={loadAdminData}
+                  >
+                    Update ↻
+                  </button>
+                </div>
+
+                <div className="adminOverviewGrid">
+                  <div className="overviewBox">
+                    <b>📋 Requests</b>
+                    <span>
+                      {adminStats.pendingRequests} Pending
+                    </span>
+                    <span>
+                      {adminStats.acceptedRequests} Accepted
+                    </span>
+                    <span>
+                      {adminStats.progressRequests} In Progress
+                    </span>
+                    <span>
+                      {adminStats.completedRequests} Completed
+                    </span>
+                  </div>
+
+                  <div className="overviewBox">
+                    <b>💰 Payments</b>
+                    <span>
+                      {payments.filter(
+                        (p) =>
+                          p.payment_status ===
+                          "pending"
+                      ).length}{" "}
+                      Pending
+                    </span>
+                    <span>
+                      {adminStats.paidPayments} Paid
+                    </span>
+                    <span>
+                      {payments.filter(
+                        (p) =>
+                          p.payment_status ===
+                          "failed"
+                      ).length}{" "}
+                      Failed
+                    </span>
+                    <span>
+                      {money(
+                        adminStats.providerPayable
+                      )}{" "}
+                      Provider payable
+                    </span>
+                  </div>
+
+                  <div className="overviewBox">
+                    <b>👥 Users</b>
+                    <span>
+                      {adminStats.customers} Customers
+                    </span>
+                    <span>
+                      {adminStats.providers} Providers
+                    </span>
+                    <span>
+                      {adminStats.activeUsers} Active
+                    </span>
+                    <span>
+                      {adminStats.users -
+                        adminStats.activeUsers}{" "}
+                      Inactive
+                    </span>
+                  </div>
+                </div>
+              </section>
+
+              <section className="adminPanel">
+                <div className="panelHeader">
+                  <div>
+                    <h2>📋 Recent Requests</h2>
+                    <p>
+                      Latest customer requirements
+                    </p>
                   </div>
 
                   <button
@@ -733,7 +1609,7 @@ export default function App() {
                       <thead>
                         <tr>
                           <th>Need</th>
-                          <th>Category</th>
+                          <th>Customer</th>
                           <th>Location</th>
                           <th>Status</th>
                           <th>Date</th>
@@ -744,7 +1620,14 @@ export default function App() {
                         {requests
                           .slice(0, 10)
                           .map((request) => (
-                            <tr key={request.id}>
+                            <tr
+                              key={request.id}
+                              onClick={() =>
+                                setSelectedRequest(
+                                  request
+                                )
+                              }
+                            >
                               <td>
                                 <b>
                                   {request.need ||
@@ -753,8 +1636,9 @@ export default function App() {
                               </td>
 
                               <td>
-                                {request.category ||
-                                  "General"}
+                                {userName(
+                                  request.user_id
+                                )}
                               </td>
 
                               <td>
@@ -786,58 +1670,183 @@ export default function App() {
             </>
           )}
 
-          {tab === "adminRequests" && (
+          {/* ================= USERS ================= */}
+
+          {tab === "adminUsers" && (
             <section className="adminPanel">
               <div className="panelHeader">
                 <div>
-                  <h2>All Requests</h2>
+                  <h2>
+                    👥 JUGAAD Users
+                  </h2>
+
                   <p>
-                    Customer ki sari requirements
+                    {filteredUsers.length} users found
                   </p>
                 </div>
               </div>
 
-              {requests.length === 0 ? (
+              <div className="adminFilters">
+                <input
+                  value={adminSearch}
+                  onChange={(e) =>
+                    setAdminSearch(
+                      e.target.value
+                    )
+                  }
+                  placeholder="🔎 Name, phone, role ya ID search..."
+                />
+
+                <select
+                  value={adminFilter}
+                  onChange={(e) =>
+                    setAdminFilter(
+                      e.target.value
+                    )
+                  }
+                >
+                  <option value="all">
+                    Sab Users
+                  </option>
+                  <option value="customer">
+                    Customers
+                  </option>
+                  <option value="provider">
+                    Providers
+                  </option>
+                  <option value="worker">
+                    Workers
+                  </option>
+                  <option value="admin">
+                    Admins
+                  </option>
+                </select>
+              </div>
+
+              {filteredUsers.length === 0 ? (
                 <div className="emptyState">
-                  📭 Koi request nahi.
+                  👤 Koi user nahi mila.
                 </div>
               ) : (
-                <div className="requestAdminGrid">
-                  {requests.map((request) => (
+                <div className="userAdminGrid">
+                  {filteredUsers.map((p) => (
                     <div
-                      className="adminRequestCard"
-                      key={request.id}
+                      className="userAdminCard"
+                      key={p.id}
                     >
-                      <div className="cardTop">
-                        <span className="categoryTag">
-                          {request.category ||
-                            "General"}
-                        </span>
-
-                        <span className="statusPill">
-                          {statusLabel(
-                            request.status
+                      <div className="userCardHead">
+                        <div className="bigAvatar">
+                          {p.avatar_url ? (
+                            <img
+                              src={p.avatar_url}
+                              alt=""
+                            />
+                          ) : (
+                            "👤"
                           )}
-                        </span>
+                        </div>
+
+                        <div>
+                          <h3>
+                            {p.full_name ||
+                              "JUGAAD User"}
+                          </h3>
+
+                          <span className="roleBadge">
+                            {roleLabel(p.role)}
+                          </span>
+                        </div>
                       </div>
 
-                      <h3>
-                        {request.need ||
-                          "Customer requirement"}
-                      </h3>
+                      <div className="userInfo">
+                        <p>
+                          📱{" "}
+                          {p.phone ||
+                            "Phone not added"}
+                        </p>
 
-                      <p>
-                        📍{" "}
-                        {request.location ||
-                          "Location not given"}
-                      </p>
+                        <p>
+                          📍{" "}
+                          {p.preferred_address ||
+                            p.service_area ||
+                            "Address not added"}
+                        </p>
 
-                      <small>
-                        {formatDate(
-                          request.created_at ||
-                            request.create_at
+                        <p>
+                          ⭐{" "}
+                          {p.rating ?? 0} &nbsp; | &nbsp;
+                          🛠️{" "}
+                          {p.completed_job ?? 0} jobs
+                        </p>
+                      </div>
+
+                      <div className="userStatusRow">
+                        <span
+                          className={
+                            p.is_active
+                              ? "statusPill success"
+                              : "statusPill"
+                          }
+                        >
+                          {p.is_active
+                            ? "🟢 Active"
+                            : "🔴 Inactive"}
+                        </span>
+
+                        {String(
+                          p.role || ""
+                        ).toLowerCase() ===
+                          "provider" && (
+                          <span className="statusPill">
+                            {p.is_verified
+                              ? "✅ Verified"
+                              : "⚠️ Unverified"}
+                          </span>
                         )}
-                      </small>
+                      </div>
+
+                      <div className="adminCardActions">
+                        <button
+                          onClick={() =>
+                            adminUpdateUser(
+                              p.id,
+                              {
+                                is_active:
+                                  !p.is_active,
+                              }
+                            )
+                          }
+                        >
+                          {p.is_active
+                            ? "🔴 Deactivate"
+                            : "🟢 Activate"}
+                        </button>
+
+                        {[
+                          "provider",
+                          "worker",
+                        ].includes(
+                          String(
+                            p.role || ""
+                          ).toLowerCase()
+                        ) && (
+                          <button
+                            onClick={() =>
+                              adminUpdateUser(
+                                p.id,
+                                {
+                                  is_verified:
+                                    !p.is_verified,
+                                }
+                              )
+                            }
+                          >
+                            {p.is_verified
+                              ? "❌ Unverify"
+                              : "✅ Verify"}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -845,11 +1854,151 @@ export default function App() {
             </section>
           )}
 
+          {/* ================= REQUESTS ================= */}
+
+          {tab === "adminRequests" && (
+            <section className="adminPanel">
+              <div className="panelHeader">
+                <div>
+                  <h2>
+                    📋 All Requests
+                  </h2>
+
+                  <p>
+                    Customer ki sari requirements
+                  </p>
+                </div>
+              </div>
+
+              <div className="adminFilters">
+                <input
+                  value={adminSearch}
+                  onChange={(e) =>
+                    setAdminSearch(
+                      e.target.value
+                    )
+                  }
+                  placeholder="🔎 Requirement, category, location..."
+                />
+              </div>
+
+              {filteredRequests.length === 0 ? (
+                <div className="emptyState">
+                  📭 Koi request nahi.
+                </div>
+              ) : (
+                <div className="requestAdminGrid">
+                  {filteredRequests.map(
+                    (request) => (
+                      <div
+                        className="adminRequestCard"
+                        key={request.id}
+                      >
+                        <div className="cardTop">
+                          <span className="categoryTag">
+                            {request.category ||
+                              "General"}
+                          </span>
+
+                          <span className="statusPill">
+                            {statusLabel(
+                              request.status
+                            )}
+                          </span>
+                        </div>
+
+                        <h3>
+                          {request.need ||
+                            "Customer requirement"}
+                        </h3>
+
+                        <p>
+                          👤{" "}
+                          {userName(
+                            request.user_id
+                          )}
+                        </p>
+
+                        <p>
+                          📍{" "}
+                          {request.location ||
+                            "Location not given"}
+                        </p>
+
+                        {request.provider_id && (
+                          <p>
+                            🧰 Provider:{" "}
+                            {userName(
+                              request.provider_id
+                            )}
+                          </p>
+                        )}
+
+                        <small>
+                          {formatDate(
+                            request.created_at ||
+                              request.create_at
+                          )}
+                        </small>
+
+                        <div className="adminCardActions">
+                          <button
+                            onClick={() =>
+                              setSelectedRequest(
+                                request
+                              )
+                            }
+                          >
+                            👁️ Details
+                          </button>
+
+                          <select
+                            value={
+                              request.status ||
+                              STATUS.pending
+                            }
+                            onChange={(e) =>
+                              adminUpdateRequestStatus(
+                                request.id,
+                                e.target.value
+                              )
+                            }
+                          >
+                            <option value="pending">
+                              Pending
+                            </option>
+                            <option value="accepted">
+                              Accepted
+                            </option>
+                            <option value="in_progress">
+                              In Progress
+                            </option>
+                            <option value="completed">
+                              Completed
+                            </option>
+                            <option value="cancelled">
+                              Cancelled
+                            </option>
+                          </select>
+                        </div>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* ================= MATCHES ================= */}
+
           {tab === "adminMatches" && (
             <section className="adminPanel">
               <div className="panelHeader">
                 <div>
-                  <h2>Active Matches</h2>
+                  <h2>
+                    🤝 Matches
+                  </h2>
+
                   <p>
                     Customer aur provider connections
                   </p>
@@ -862,46 +2011,338 @@ export default function App() {
                 </div>
               ) : (
                 <div className="requestAdminGrid">
-                  {matches.map((match) => (
-                    <div
-                      className="adminRequestCard"
-                      key={match.id}
-                    >
-                      <h3>
-                        🤝 Match
-                      </h3>
+                  {matches.map((match) => {
+                    const request =
+                      requests.find(
+                        (r) =>
+                          r.id ===
+                          match.request_id
+                      );
 
-                      <p>
-                        Request ID:
-                        <br />
-                        {match.request_id}
-                      </p>
+                    const providerId =
+                      match.provider_id ||
+                      match.worker_id;
 
-                      <p>
-                        Provider:
-                        <br />
-                        {match.provider_id ||
-                          match.worker_id ||
-                          "Not assigned"}
-                      </p>
+                    return (
+                      <div
+                        className="adminRequestCard"
+                        key={match.id}
+                      >
+                        <div className="cardTop">
+                          <span className="categoryTag">
+                            🤝 Match
+                          </span>
 
-                      <span className="statusPill">
-                        {match.status ||
-                          match.matches_status ||
-                          "accepted"}
-                      </span>
-                    </div>
-                  ))}
+                          <span className="statusPill">
+                            {match.status ||
+                              match.matches_status ||
+                              "accepted"}
+                          </span>
+                        </div>
+
+                        <h3>
+                          {request?.need ||
+                            "JUGAAD Request"}
+                        </h3>
+
+                        <p>
+                          👤 Customer:{" "}
+                          <b>
+                            {userName(
+                              request?.user_id
+                            )}
+                          </b>
+                        </p>
+
+                        <p>
+                          🧰 Provider:{" "}
+                          <b>
+                            {userName(
+                              providerId
+                            )}
+                          </b>
+                        </p>
+
+                        {match.quoted_amount !=
+                          null && (
+                          <p>
+                            💰 Quote:{" "}
+                            <b>
+                              {money(
+                                match.quoted_amount
+                              )}
+                            </b>
+                          </p>
+                        )}
+
+                        {match.distance_km !=
+                          null && (
+                          <p>
+                            📍 Distance:{" "}
+                            {
+                              match.distance_km
+                            }{" "}
+                            km
+                          </p>
+                        )}
+
+                        <small>
+                          {formatDate(
+                            match.created_at
+                          )}
+                        </small>
+
+                        <div className="adminCardActions">
+                          <button
+                            onClick={() =>
+                              setSelectedMatch(
+                                match
+                              )
+                            }
+                          >
+                            👁️ Full Details
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </section>
           )}
 
+          {/* ================= PAYMENTS ================= */}
+
+          {tab === "adminPayments" && (
+            <section className="adminPanel">
+              <div className="panelHeader">
+                <div>
+                  <h2>
+                    💰 Payment Control Room
+                  </h2>
+
+                  <p>
+                    Payments, refunds aur provider payouts
+                  </p>
+                </div>
+
+                <button
+                  onClick={loadAdminData}
+                >
+                  ↻ Refresh
+                </button>
+              </div>
+
+              <div className="statsGrid">
+                <div className="statCard">
+                  <span>💳</span>
+                  <small>Transactions</small>
+                  <strong>
+                    {payments.length}
+                  </strong>
+                </div>
+
+                <div className="statCard">
+                  <span>✅</span>
+                  <small>Successful</small>
+                  <strong>
+                    {
+                      payments.filter(
+                        (p) =>
+                          p.payment_status ===
+                          "paid"
+                      ).length
+                    }
+                  </strong>
+                </div>
+
+                <div className="statCard">
+                  <span>💵</span>
+                  <small>Collected</small>
+                  <strong>
+                    {money(
+                      adminStats.totalCollected
+                    )}
+                  </strong>
+                </div>
+
+                <div className="statCard">
+                  <span>🏦</span>
+                  <small>Platform Fee</small>
+                  <strong>
+                    {money(
+                      adminStats.platformEarnings
+                    )}
+                  </strong>
+                </div>
+              </div>
+
+              <div className="adminFilters">
+                <input
+                  value={adminSearch}
+                  onChange={(e) =>
+                    setAdminSearch(
+                      e.target.value
+                    )
+                  }
+                  placeholder="🔎 Transaction ID, customer, provider, status..."
+                />
+              </div>
+
+              {filteredPayments.length === 0 ? (
+                <div className="emptyState">
+                  💸 Abhi payment record nahi hai.
+                </div>
+              ) : (
+                <div className="paymentAdminGrid">
+                  {filteredPayments.map(
+                    (payment) => (
+                      <div
+                        className="paymentAdminCard"
+                        key={payment.id}
+                      >
+                        <div className="cardTop">
+                          <span className="categoryTag">
+                            💳 Payment
+                          </span>
+
+                          <span className="statusPill">
+                            {paymentStatusLabel(
+                              payment.payment_status
+                            )}
+                          </span>
+                        </div>
+
+                        <h3>
+                          {money(payment.amount)}
+                        </h3>
+
+                        <p>
+                          👤 Customer:{" "}
+                          <b>
+                            {userName(
+                              payment.customer_id
+                            )}
+                          </b>
+                        </p>
+
+                        <p>
+                          🧰 Provider:{" "}
+                          <b>
+                            {userName(
+                              payment.provider_id
+                            )}
+                          </b>
+                        </p>
+
+                        <p>
+                          🧾 Transaction:{" "}
+                          <span className="mono">
+                            {payment.transaction_id ||
+                              "Not provided"}
+                          </span>
+                        </p>
+
+                        <div className="paymentBreakdown">
+                          <span>
+                            JUGAAD fee:{" "}
+                            {money(
+                              payment.platform_fee
+                            )}
+                          </span>
+
+                          <span>
+                            Provider:{" "}
+                            {money(
+                              payment.provider_amount
+                            )}
+                          </span>
+                        </div>
+
+                        <p>
+                          💸 Payout:{" "}
+                          {payment.payout_status}
+                        </p>
+
+                        <small>
+                          {formatDate(
+                            payment.created_at
+                          )}
+                        </small>
+
+                        <div className="adminCardActions">
+                          <button
+                            onClick={() =>
+                              setSelectedPayment(
+                                payment
+                              )
+                            }
+                          >
+                            👁️ Details
+                          </button>
+
+                          {payment.payment_status ===
+                            "pending" && (
+                            <button
+                              onClick={() =>
+                                adminPaymentStatus(
+                                  payment.id,
+                                  "paid"
+                                )
+                              }
+                            >
+                              ✅ Mark Paid
+                            </button>
+                          )}
+
+                          {payment.payment_status ===
+                            "processing" && (
+                            <button
+                              onClick={() =>
+                                adminPaymentStatus(
+                                  payment.id,
+                                  "paid"
+                                )
+                              }
+                            >
+                              ✅ Verify
+                            </button>
+                          )}
+
+                          {payment.payment_status ===
+                            "paid" &&
+                            payment.payout_status !==
+                              "paid" && (
+                              <button
+                                onClick={() =>
+                                  adminPayout(
+                                    payment.id,
+                                    "paid"
+                                  )
+                                }
+                              >
+                                💸 Payout
+                              </button>
+                            )}
+                        </div>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* ================= NOTIFICATIONS ================= */}
+
           {tab === "adminNotifications" && (
             <section className="adminPanel">
               <div className="panelHeader">
                 <div>
-                  <h2>Notifications</h2>
+                  <h2>
+                    🔔 Notifications
+                  </h2>
+
                   <p>
                     JUGAAD activity alerts
                   </p>
@@ -933,7 +2374,9 @@ export default function App() {
                       }
                       key={n.id}
                       onClick={() =>
-                        markNotificationRead(n.id)
+                        markNotificationRead(
+                          n.id
+                        )
                       }
                     >
                       <div className="notificationIcon">
@@ -943,8 +2386,11 @@ export default function App() {
                       <div>
                         <b>{n.title}</b>
                         <p>{n.message}</p>
+
                         <small>
-                          {formatDate(n.created_at)}
+                          {formatDate(
+                            n.created_at
+                          )}
                         </small>
                       </div>
 
@@ -960,9 +2406,467 @@ export default function App() {
             </section>
           )}
         </main>
+
+        {/* ================= REQUEST MODAL ================= */}
+
+        {selectedRequest && (
+          <div
+            className="modalOverlay"
+            onClick={() =>
+              setSelectedRequest(null)
+            }
+          >
+            <div
+              className="adminModal"
+              onClick={(e) =>
+                e.stopPropagation()
+              }
+            >
+              <div className="modalHeader">
+                <div>
+                  <h2>
+                    📋 Request Details
+                  </h2>
+                  <small>
+                    {shortId(
+                      selectedRequest.id
+                    )}
+                  </small>
+                </div>
+
+                <button
+                  onClick={() =>
+                    setSelectedRequest(null)
+                  }
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="detailList">
+                <div>
+                  <span>Requirement</span>
+                  <b>
+                    {selectedRequest.need ||
+                      "—"}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Category</span>
+                  <b>
+                    {selectedRequest.category ||
+                      "General"}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Customer</span>
+                  <b>
+                    {userName(
+                      selectedRequest.user_id
+                    )}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Location</span>
+                  <b>
+                    {selectedRequest.location ||
+                      "Not provided"}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Provider</span>
+                  <b>
+                    {userName(
+                      selectedRequest.provider_id
+                    )}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Status</span>
+                  <b>
+                    {statusLabel(
+                      selectedRequest.status
+                    )}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Created</span>
+                  <b>
+                    {formatDate(
+                      selectedRequest.created_at ||
+                        selectedRequest.create_at
+                    )}
+                  </b>
+                </div>
+              </div>
+
+              <select
+                value={
+                  selectedRequest.status ||
+                  STATUS.pending
+                }
+                onChange={(e) => {
+                  adminUpdateRequestStatus(
+                    selectedRequest.id,
+                    e.target.value
+                  );
+
+                  setSelectedRequest({
+                    ...selectedRequest,
+                    status: e.target.value,
+                  });
+                }}
+              >
+                <option value="pending">
+                  ⏳ Pending
+                </option>
+
+                <option value="accepted">
+                  🤝 Accepted
+                </option>
+
+                <option value="in_progress">
+                  🚗 In Progress
+                </option>
+
+                <option value="completed">
+                  ✅ Completed
+                </option>
+
+                <option value="cancelled">
+                  ❌ Cancelled
+                </option>
+              </select>
+            </div>
+          </div>
+        )}
+
+        {/* ================= MATCH MODAL ================= */}
+
+        {selectedMatch && (
+          <div
+            className="modalOverlay"
+            onClick={() =>
+              setSelectedMatch(null)
+            }
+          >
+            <div
+              className="adminModal"
+              onClick={(e) =>
+                e.stopPropagation()
+              }
+            >
+              <div className="modalHeader">
+                <h2>
+                  🤝 Match Details
+                </h2>
+
+                <button
+                  onClick={() =>
+                    setSelectedMatch(null)
+                  }
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="detailList">
+                <div>
+                  <span>Request</span>
+                  <b>
+                    {shortId(
+                      selectedMatch.request_id
+                    )}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Customer</span>
+                  <b>
+                    {userName(
+                      requests.find(
+                        (r) =>
+                          r.id ===
+                          selectedMatch.request_id
+                      )?.user_id
+                    )}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Provider</span>
+                  <b>
+                    {userName(
+                      selectedMatch.provider_id ||
+                        selectedMatch.worker_id
+                    )}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Quote</span>
+                  <b>
+                    {selectedMatch.quoted_amount !=
+                    null
+                      ? money(
+                          selectedMatch.quoted_amount
+                        )
+                      : "Not quoted"}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Distance</span>
+                  <b>
+                    {selectedMatch.distance_km !=
+                    null
+                      ? `${selectedMatch.distance_km} km`
+                      : "Not available"}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Status</span>
+                  <b>
+                    {selectedMatch.status ||
+                      selectedMatch.matches_status ||
+                      "accepted"}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Created</span>
+                  <b>
+                    {formatDate(
+                      selectedMatch.created_at
+                    )}
+                  </b>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================= PAYMENT MODAL ================= */}
+
+        {selectedPayment && (
+          <div
+            className="modalOverlay"
+            onClick={() =>
+              setSelectedPayment(null)
+            }
+          >
+            <div
+              className="adminModal"
+              onClick={(e) =>
+                e.stopPropagation()
+              }
+            >
+              <div className="modalHeader">
+                <div>
+                  <h2>
+                    💰 Payment Details
+                  </h2>
+
+                  <small>
+                    {shortId(
+                      selectedPayment.id
+                    )}
+                  </small>
+                </div>
+
+                <button
+                  onClick={() =>
+                    setSelectedPayment(null)
+                  }
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="detailList">
+                <div>
+                  <span>Amount</span>
+                  <b>
+                    {money(
+                      selectedPayment.amount
+                    )}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Customer</span>
+                  <b>
+                    {userName(
+                      selectedPayment.customer_id
+                    )}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Provider</span>
+                  <b>
+                    {userName(
+                      selectedPayment.provider_id
+                    )}
+                  </b>
+                </div>
+
+                <div>
+                  <span>JUGAAD Fee</span>
+                  <b>
+                    {money(
+                      selectedPayment.platform_fee
+                    )}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Provider Amount</span>
+                  <b>
+                    {money(
+                      selectedPayment.provider_amount
+                    )}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Payment Method</span>
+                  <b>
+                    {selectedPayment.payment_method ||
+                      "Not provided"}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Gateway</span>
+                  <b>
+                    {selectedPayment.payment_gateway ||
+                      "Not provided"}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Transaction ID</span>
+                  <b className="mono">
+                    {selectedPayment.transaction_id ||
+                      "Not provided"}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Payment Status</span>
+                  <b>
+                    {paymentStatusLabel(
+                      selectedPayment.payment_status
+                    )}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Refund</span>
+                  <b>
+                    {selectedPayment.refund_status}{" "}
+                    {selectedPayment.refund_amount
+                      ? `(${money(
+                          selectedPayment.refund_amount
+                        )})`
+                      : ""}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Provider Payout</span>
+                  <b>
+                    {selectedPayment.payout_status}
+                  </b>
+                </div>
+
+                <div>
+                  <span>Created</span>
+                  <b>
+                    {formatDate(
+                      selectedPayment.created_at
+                    )}
+                  </b>
+                </div>
+              </div>
+
+              <div className="modalActions">
+                {selectedPayment.payment_status !==
+                  "paid" &&
+                  selectedPayment.payment_status !==
+                    "refunded" && (
+                    <button
+                      className="primaryButton"
+                      onClick={() =>
+                        adminPaymentStatus(
+                          selectedPayment.id,
+                          "paid"
+                        )
+                      }
+                    >
+                      ✅ Mark Payment Paid
+                    </button>
+                  )}
+
+                {selectedPayment.payment_status ===
+                  "paid" && (
+                  <>
+                    <button
+                      className="primaryButton"
+                      onClick={() =>
+                        adminPayout(
+                          selectedPayment.id,
+                          "paid"
+                        )
+                      }
+                    >
+                      💸 Mark Provider Payout Paid
+                    </button>
+
+                    <button
+                      onClick={() =>
+                        adminRefund(
+                          selectedPayment
+                        )
+                      }
+                    >
+                      ↩️ Refund
+                    </button>
+                  </>
+                )}
+
+                {selectedPayment.payment_status ===
+                  "pending" && (
+                  <button
+                    onClick={() =>
+                      adminPaymentStatus(
+                        selectedPayment.id,
+                        "failed"
+                      )
+                    }
+                  >
+                    ❌ Mark Failed
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
+
+  /* =====================================================
+     CUSTOMER / PROVIDER
+     ===================================================== */
 
   return (
     <div className="appShell">
@@ -974,6 +2878,7 @@ export default function App() {
 
           <div>
             <h1>JUGAAD</h1>
+
             <small>
               Har zarurat ka jugaad 🇮🇳
             </small>
@@ -990,6 +2895,7 @@ export default function App() {
             }
           >
             🔔
+
             {unreadCount > 0 && (
               <span>{unreadCount}</span>
             )}
@@ -1000,7 +2906,9 @@ export default function App() {
       {showNotifications && (
         <div className="notificationDropdown">
           <div className="notificationHead">
-            <h3>Notifications 🔔</h3>
+            <h3>
+              Notifications 🔔
+            </h3>
 
             {unreadCount > 0 && (
               <button
@@ -1029,13 +2937,19 @@ export default function App() {
                   }
                   key={n.id}
                   onClick={() =>
-                    markNotificationRead(n.id)
+                    markNotificationRead(
+                      n.id
+                    )
                   }
                 >
                   <b>{n.title}</b>
+
                   <p>{n.message}</p>
+
                   <small>
-                    {formatDate(n.created_at)}
+                    {formatDate(
+                      n.created_at
+                    )}
                   </small>
                 </div>
               ))
@@ -1104,7 +3018,7 @@ export default function App() {
                   onChange={(e) =>
                     setLocation(e.target.value)
                   }
-                  placeholder="📍 Location — jaise Lucknow"
+                  placeholder="📍 Location — jaise Jhansi"
                 />
 
                 <button
@@ -1122,7 +3036,10 @@ export default function App() {
             {isProvider && (
               <section>
                 <div className="sectionTitle">
-                  <h2>🧰 Available Kaam</h2>
+                  <h2>
+                    🧰 Available Kaam
+                  </h2>
+
                   <button
                     onClick={loadRequests}
                   >
@@ -1130,7 +3047,8 @@ export default function App() {
                   </button>
                 </div>
 
-                {providerRequests.length === 0 ? (
+                {providerRequests.length ===
+                0 ? (
                   <div className="emptyCard">
                     😴 Abhi kaam nahi mila.
                     <br />
@@ -1284,7 +3202,10 @@ export default function App() {
           <section>
             <div className="sectionTitle">
               <div>
-                <h2>📋 Meri Requests</h2>
+                <h2>
+                  📋 Meri Requests
+                </h2>
+
                 <p>
                   JUGAAD ka poora hisaab yahan.
                 </p>
@@ -1297,7 +3218,8 @@ export default function App() {
               </button>
             </div>
 
-            {customerRequests.length === 0 ? (
+            {customerRequests.length ===
+            0 ? (
               <div className="emptyCard">
                 📭 Abhi koi request nahi.
                 <br />
@@ -1365,19 +3287,20 @@ export default function App() {
                                     🧰 Provider:
                                     <br />
                                     <span className="mono">
-                                      {match.provider_id ||
-                                        match.worker_id ||
-                                        "Assigned"}
+                                      {userName(
+                                        match.provider_id ||
+                                          match.worker_id
+                                      )}
                                     </span>
                                   </p>
 
                                   {match.quoted_amount !=
                                     null && (
                                     <p>
-                                      💰 ₹
-                                      {
+                                      💰{" "}
+                                      {money(
                                         match.quoted_amount
-                                      }
+                                      )}
                                     </p>
                                   )}
                                 </div>
@@ -1447,24 +3370,31 @@ export default function App() {
 
             <div className="profileForm">
               <label>Naam</label>
+
               <input
                 value={profileName}
                 onChange={(e) =>
-                  setProfileName(e.target.value)
+                  setProfileName(
+                    e.target.value
+                  )
                 }
                 placeholder="Aapka naam"
               />
 
               <label>Phone</label>
+
               <input
                 value={profilePhone}
                 onChange={(e) =>
-                  setProfilePhone(e.target.value)
+                  setProfilePhone(
+                    e.target.value
+                  )
                 }
                 placeholder="Phone number"
               />
 
               <label>Address</label>
+
               <textarea
                 value={profileAddress}
                 onChange={(e) =>
@@ -1497,11 +3427,17 @@ export default function App() {
                     ? "roleOption selected"
                     : "roleOption"
                 }
-                onClick={switchToCustomer}
+                onClick={
+                  switchToCustomer
+                }
               >
                 🧑
+
                 <div>
-                  <b>Mujhe kaam chahiye</b>
+                  <b>
+                    Mujhe kaam chahiye
+                  </b>
+
                   <small>
                     Customer mode
                   </small>
@@ -1514,11 +3450,17 @@ export default function App() {
                     ? "roleOption selected"
                     : "roleOption"
                 }
-                onClick={switchToProvider}
+                onClick={
+                  switchToProvider
+                }
               >
                 🧰
+
                 <div>
-                  <b>Mujhe kaam karna hai</b>
+                  <b>
+                    Mujhe kaam karna hai
+                  </b>
+
                   <small>
                     Provider mode
                   </small>
@@ -1539,9 +3481,13 @@ export default function App() {
       <nav className="bottomNav">
         <button
           className={
-            tab === "home" ? "navActive" : ""
+            tab === "home"
+              ? "navActive"
+              : ""
           }
-          onClick={() => setTab("home")}
+          onClick={() =>
+            setTab("home")
+          }
         >
           <span>🏠</span>
           Home
@@ -1553,7 +3499,9 @@ export default function App() {
               ? "navActive"
               : ""
           }
-          onClick={() => setTab("requests")}
+          onClick={() =>
+            setTab("requests")
+          }
         >
           <span>📋</span>
           Requests
@@ -1565,7 +3513,9 @@ export default function App() {
               ? "navActive"
               : ""
           }
-          onClick={() => setTab("profile")}
+          onClick={() =>
+            setTab("profile")
+          }
         >
           <span>👤</span>
           Profile
