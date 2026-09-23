@@ -88,6 +88,8 @@ const STATUS = {
   cancelled: "cancelled",
 };
 
+const JUGAAD_COMMISSION_RATE = 0.10;
+
 const categories = [
   "Sab",
   "Home",
@@ -981,15 +983,14 @@ export default function App() {
       }
     }
 
-    /*
-      Platform fee currently 0.
-      Later admin-configurable fee can be
-      added without changing payment records.
-    */
-
-    const platformFee = 0;
-    const providerAmount =
-      amount - platformFee;
+    // JUGAAD commission: fixed 10% of the customer payment.
+    // Example: ₹1,000 payment → ₹100 JUGAAD commission → ₹900 provider share.
+    const platformFee = Math.round(
+      amount * JUGAAD_COMMISSION_RATE * 100
+    ) / 100;
+    const providerAmount = Math.round(
+      (amount - platformFee) * 100
+    ) / 100;
 
     const { error } =
       await supabase
@@ -4061,11 +4062,15 @@ export default function App() {
 
                 <div>
                   <small>
-                    Platform fee
+                    JUGAAD commission (10%)
                   </small>
 
                   <strong>
-                    ₹0
+                    ₹
+                    {(Number(paymentAmount || 0) * JUGAAD_COMMISSION_RATE).toLocaleString(
+                      "en-IN",
+                      { minimumFractionDigits: 0, maximumFractionDigits: 2 }
+                    )}
                   </strong>
                 </div>
 
@@ -4076,10 +4081,9 @@ export default function App() {
 
                   <strong>
                     ₹
-                    {Number(
-                      paymentAmount || 0
-                    ).toLocaleString(
-                      "en-IN"
+                    {(Number(paymentAmount || 0) * (1 - JUGAAD_COMMISSION_RATE)).toLocaleString(
+                      "en-IN",
+                      { minimumFractionDigits: 0, maximumFractionDigits: 2 }
                     )}
                   </strong>
                 </div>
