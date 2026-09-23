@@ -69,7 +69,11 @@ type PaymentRow = {
   provider_id?: string | null;
   amount: number;
   platform_fee?: number | null;
+  commission_rate?: number | null;
   provider_amount?: number | null;
+  settlement_status?: string | null;
+  settlement_id?: string | null;
+  provider_paid_at?: string | null;
   payment_method?: string | null;
   transaction_id?: string | null;
   payment_status?: string | null;
@@ -918,6 +922,38 @@ export default function App() {
     await loadPayments();
   };
 
+  const updateSettlementStatus = async (
+    paymentId: string,
+    settlementStatus: string
+  ) => {
+    const values: Record<string, unknown> = {
+      settlement_status: settlementStatus,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (settlementStatus === "settled") {
+      values.provider_paid_at = new Date().toISOString();
+    }
+
+    const { error } = await supabase
+      .from("payments")
+      .update(values)
+      .eq("id", paymentId);
+
+    if (error) {
+      setMessage(`❌ Settlement update nahi hua: ${error.message}`);
+      return;
+    }
+
+    setMessage(
+      settlementStatus === "settled"
+        ? "💸 Provider settlement confirmed."
+        : `💸 Settlement: ${settlementStatus}`
+    );
+
+    await loadPayments();
+  };
+
   const createPayment = async () => {
     if (!user || !paymentAmount.trim()) {
       setMessage(
@@ -1003,9 +1039,13 @@ export default function App() {
           customer_id: customerId,
           provider_id: providerId,
           amount,
+          commission_rate: JUGAAD_COMMISSION_RATE * 100,
           platform_fee: platformFee,
           provider_amount:
             providerAmount,
+          settlement_status: "pending",
+          settlement_id: null,
+          provider_paid_at: null,
           payment_method:
             paymentMethod,
           transaction_id:
@@ -3758,6 +3798,40 @@ export default function App() {
 
                 <div>
                   <small>
+                    Commission Rate
+                  </small>
+
+                  <strong>
+                    {Number(
+                      selectedPayment.commission_rate ?? 10
+                    ).toLocaleString("en-IN", {
+                      maximumFractionDigits: 2,
+                    })}%
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Settlement
+                  </small>
+
+                  <strong>
+                    {selectedPayment.settlement_status || "pending"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Provider Paid At
+                  </small>
+
+                  <strong>
+                    {formatDate(selectedPayment.provider_paid_at)}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
                     Customer
                   </small>
 
@@ -3905,6 +3979,21 @@ export default function App() {
                     }}
                   >
                     ↩️ Refund
+                  </button>
+                )}
+
+                {selectedPayment.payment_status === "paid" &&
+                  (selectedPayment.settlement_status || "pending") !== "settled" && (
+                  <button
+                    onClick={() => {
+                      updateSettlementStatus(
+                        selectedPayment.id,
+                        "settled"
+                      );
+                      setSelectedPayment(null);
+                    }}
+                  >
+                    💸 Provider Paid / Settle
                   </button>
                 )}
               </div>
@@ -4085,6 +4174,16 @@ export default function App() {
                       "en-IN",
                       { minimumFractionDigits: 0, maximumFractionDigits: 2 }
                     )}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Settlement
+                  </small>
+
+                  <strong>
+                    ⏳ Pending
                   </strong>
                 </div>
               </div>
