@@ -1404,28 +1404,8 @@ export default function App() {
 
   if (!user) {
     return (
-      <div
-        className="auth-screen"
-        style={{
-          background: "transparent",
-          minHeight: "100vh",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "24px",
-        }}
-      >
-        <div
-          className="auth-card"
-          style={{
-            background: "transparent",
-            border: "0",
-            boxShadow: "none",
-            maxWidth: "420px",
-            width: "100%",
-            textAlign: "center",
-          }}
-        >
+      <div className="auth-screen">
+        <div className="auth-card">
           <div className="brand-big">
             💡😎
           </div>
@@ -1437,7 +1417,7 @@ export default function App() {
           </p>
 
           <button
-            className="primary-btn"
+            className="google-login-btn"
             onClick={async () => {
               const {
                 error,
@@ -1462,7 +1442,9 @@ export default function App() {
               }
             }}
           >
-            🔐 Google se Login →
+            <span className="google-icon">G</span>
+            <span>Continue with Google</span>
+            <span className="google-arrow">→</span>
           </button>
 
           <p className="small-note">
