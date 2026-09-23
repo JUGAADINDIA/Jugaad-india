@@ -4,7 +4,6 @@ import "./App.css";
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 type Profile = {
@@ -186,13 +185,35 @@ export default function App() {
   const [requestFilter, setRequestFilter] = useState("all");
   const [paymentFilter, setPaymentFilter] = useState("all");
 
-  const [paymentFormOpen, setPaymentFormOpen] = useState(false);
-  const [paymentRequestId, setPaymentRequestId] = useState("");
-  const [paymentAmount, setPaymentAmount] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState("UPI");
-  const [paymentTransactionId, setPaymentTransactionId] = useState("");
-  const [paymentNotes, setPaymentNotes] = useState("");
-  const [savingPayment, setSavingPayment] = useState(false);
+  const [selectedRequest, setSelectedRequest] =
+    useState<RequestRow | null>(null);
+
+  const [selectedUser, setSelectedUser] =
+    useState<Profile | null>(null);
+
+  const [selectedPayment, setSelectedPayment] =
+    useState<PaymentRow | null>(null);
+
+  const [paymentFormOpen, setPaymentFormOpen] =
+    useState(false);
+
+  const [paymentRequestId, setPaymentRequestId] =
+    useState("");
+
+  const [paymentAmount, setPaymentAmount] =
+    useState("");
+
+  const [paymentMethod, setPaymentMethod] =
+    useState("UPI");
+
+  const [paymentTransactionId, setPaymentTransactionId] =
+    useState("");
+
+  const [paymentNotes, setPaymentNotes] =
+    useState("");
+
+  const [savingPayment, setSavingPayment] =
+    useState(false);
 
   const role = String(profile?.role || "customer").toLowerCase();
 
@@ -208,6 +229,8 @@ export default function App() {
   const unreadCount = notifications.filter(
     (n) => !n.is_read
   ).length;
+
+  /* ---------------- AUTH ---------------- */
 
   useEffect(() => {
     let mounted = true;
@@ -230,9 +253,11 @@ export default function App() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user || null);
-    });
+    } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setUser(session?.user || null);
+      }
+    );
 
     return () => {
       mounted = false;
@@ -280,6 +305,8 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [user, profile, isAdmin]);
 
+  /* ---------------- LOADERS ---------------- */
+
   const loadProfile = async (userId: string) => {
     const { data, error } = await supabase
       .from("profiles")
@@ -288,7 +315,7 @@ export default function App() {
       .maybeSingle();
 
     if (error) {
-      console.error(error);
+      console.error("profile:", error);
       return;
     }
 
@@ -296,7 +323,9 @@ export default function App() {
       setProfile(data as Profile);
       setProfileName(data.full_name || "");
       setProfilePhone(data.phone || "");
-      setProfileAddress(data.preferred_address || "");
+      setProfileAddress(
+        data.preferred_address || ""
+      );
     }
   };
 
@@ -307,7 +336,16 @@ export default function App() {
       .from("requests")
       .select("*");
 
-    if (isProvider) {
+    /*
+      IMPORTANT:
+      Admin ko saari requests chahiye.
+      Provider ko active/pending jobs.
+      Customer ko apni requests.
+    */
+
+    if (isAdmin) {
+      // No user filter.
+    } else if (isProvider) {
       query = query.in("status", [
         STATUS.pending,
         STATUS.accepted,
@@ -324,15 +362,20 @@ export default function App() {
       return;
     }
 
-    const sorted = ((data || []) as RequestRow[]).sort(
-      (a, b) =>
-        new Date(
-          b.created_at || b.create_at || 0
-        ).getTime() -
-        new Date(
-          a.created_at || a.create_at || 0
-        ).getTime()
-    );
+    const sorted =
+      ((data || []) as RequestRow[]).sort(
+        (a, b) =>
+          new Date(
+            b.created_at ||
+              b.create_at ||
+              0
+          ).getTime() -
+          new Date(
+            a.created_at ||
+              a.create_at ||
+              0
+          ).getTime()
+      );
 
     setRequests(sorted);
   };
@@ -344,11 +387,28 @@ export default function App() {
       .from("matches")
       .select("*");
 
-    if (!isAdmin) {
-      if (isProvider) {
-        query = query.or(
-          `provider_id.eq.${user.id},worker_id.eq.${user.id}`
+    if (!isAdmin && isProvider) {
+      query = query.or(
+        `provider_id.eq.${user.id},worker_id.eq.${user.id}`
+      );
+    }
+
+    if (!isAdmin && !isProvider) {
+      const customerRequestIds =
+        requests
+          .filter(
+            (r) => r.user_id === user.id
+          )
+          .map((r) => r.id);
+
+      if (customerRequestIds.length > 0) {
+        query = query.in(
+          "request_id",
+          customerRequestIds
         );
+      } else {
+        setMatches([]);
+        return;
       }
     }
 
@@ -362,12 +422,16 @@ export default function App() {
     setMatches((data || []) as MatchRow[]);
   };
 
-  const loadNotifications = async (userId: string) => {
+  const loadNotifications = async (
+    userId: string
+  ) => {
     const { data, error } = await supabase
       .from("notifications")
       .select("*")
       .eq("user_id", userId)
-      .order("created_at", { ascending: false })
+      .order("created_at", {
+        ascending: false,
+      })
       .limit(100);
 
     if (error) {
@@ -375,14 +439,18 @@ export default function App() {
       return;
     }
 
-    setNotifications((data || []) as NotificationRow[]);
+    setNotifications(
+      (data || []) as NotificationRow[]
+    );
   };
 
   const loadUsers = async () => {
     const { data, error } = await supabase
       .from("profiles")
       .select("*")
-      .order("created_at", { ascending: false });
+      .order("created_at", {
+        ascending: false,
+      });
 
     if (error) {
       console.error("users:", error);
@@ -396,7 +464,9 @@ export default function App() {
     const { data, error } = await supabase
       .from("payments")
       .select("*")
-      .order("created_at", { ascending: false });
+      .order("created_at", {
+        ascending: false,
+      });
 
     if (error) {
       console.error("payments:", error);
@@ -415,6 +485,8 @@ export default function App() {
       loadPayments(),
     ]);
   };
+
+  /* ---------------- CUSTOMER / PROVIDER ---------------- */
 
   const createRequest = async () => {
     if (!user) {
@@ -450,7 +522,6 @@ export default function App() {
     setSavingRequest(false);
 
     if (error) {
-      console.error(error);
       setMessage(
         `❌ Request save nahi hui: ${error.message}`
       );
@@ -459,6 +530,7 @@ export default function App() {
 
     setNeed("");
     setLocation("");
+
     setMessage(
       "🎉 JUGAAD lag gaya! Kaam dhoondh rahe hain."
     );
@@ -467,16 +539,21 @@ export default function App() {
     setTab("requests");
   };
 
-  const useService = (serviceName: string) => {
+  const useService = (
+    serviceName: string
+  ) => {
     setNeed(
       `Mujhe ${serviceName.toLowerCase()} chahiye`
     );
+
     setCategory(
       services.find(
         (s) => s.name === serviceName
       )?.category || "Sab"
     );
+
     setTab("home");
+
     window.scrollTo({
       top: 0,
       behavior: "smooth",
@@ -488,26 +565,27 @@ export default function App() {
   ) => {
     if (!user || !isProvider) return;
 
-    const { data: existing } = await supabase
-      .from("matches")
-      .select("id")
-      .eq("request_id", requestId)
-      .eq("provider_id", user.id)
-      .maybeSingle();
+    const { data: existing } =
+      await supabase
+        .from("matches")
+        .select("id")
+        .eq("request_id", requestId)
+        .eq("provider_id", user.id)
+        .maybeSingle();
 
     if (!existing) {
-      const { error } = await supabase
-        .from("matches")
-        .insert({
-          request_id: requestId,
-          provider_id: user.id,
-          worker_id: user.id,
-          status: "accepted",
-          matches_status: "accepted",
-        });
+      const { error } =
+        await supabase
+          .from("matches")
+          .insert({
+            request_id: requestId,
+            provider_id: user.id,
+            worker_id: user.id,
+            status: "accepted",
+            matches_status: "accepted",
+          });
 
       if (error) {
-        console.error(error);
         setMessage(
           `❌ Match create nahi hua: ${error.message}`
         );
@@ -515,13 +593,14 @@ export default function App() {
       }
     }
 
-    const { error } = await supabase
-      .from("requests")
-      .update({
-        status: STATUS.accepted,
-        provider_id: user.id,
-      })
-      .eq("id", requestId);
+    const { error } =
+      await supabase
+        .from("requests")
+        .update({
+          status: STATUS.accepted,
+          provider_id: user.id,
+        })
+        .eq("id", requestId);
 
     if (error) {
       setMessage(
@@ -573,15 +652,18 @@ export default function App() {
 
     setSavingProfile(true);
 
-    const { error } = await supabase
-      .from("profiles")
-      .upsert({
-        id: user.id,
-        full_name: profileName.trim() || null,
-        phone: profilePhone.trim() || null,
-        preferred_address:
-          profileAddress.trim() || null,
-      });
+    const { error } =
+      await supabase
+        .from("profiles")
+        .upsert({
+          id: user.id,
+          full_name:
+            profileName.trim() || null,
+          phone:
+            profilePhone.trim() || null,
+          preferred_address:
+            profileAddress.trim() || null,
+        });
 
     setSavingProfile(false);
 
@@ -602,13 +684,14 @@ export default function App() {
   const switchToProvider = async () => {
     if (!user) return;
 
-    const { error } = await supabase
-      .from("profiles")
-      .upsert({
-        id: user.id,
-        role: "provider",
-        is_active: true,
-      });
+    const { error } =
+      await supabase
+        .from("profiles")
+        .upsert({
+          id: user.id,
+          role: "provider",
+          is_active: true,
+        });
 
     if (error) {
       setMessage(
@@ -627,12 +710,13 @@ export default function App() {
   const switchToCustomer = async () => {
     if (!user) return;
 
-    const { error } = await supabase
-      .from("profiles")
-      .upsert({
-        id: user.id,
-        role: "customer",
-      });
+    const { error } =
+      await supabase
+        .from("profiles")
+        .upsert({
+          id: user.id,
+          role: "customer",
+        });
 
     if (error) {
       setMessage(
@@ -652,42 +736,56 @@ export default function App() {
     await supabase.auth.signOut();
   };
 
+  /* ---------------- NOTIFICATIONS ---------------- */
+
   const markNotificationRead = async (
     notificationId: string
   ) => {
-    const { error } = await supabase
-      .from("notifications")
-      .update({ is_read: true })
-      .eq("id", notificationId)
-      .eq("user_id", user?.id);
+    const { error } =
+      await supabase
+        .from("notifications")
+        .update({
+          is_read: true,
+        })
+        .eq("id", notificationId)
+        .eq("user_id", user?.id);
 
     if (!error && user) {
       await loadNotifications(user.id);
     }
   };
 
-  const markAllNotificationsRead = async () => {
-    if (!user) return;
+  const markAllNotificationsRead =
+    async () => {
+      if (!user) return;
 
-    const { error } = await supabase
-      .from("notifications")
-      .update({ is_read: true })
-      .eq("user_id", user.id)
-      .eq("is_read", false);
+      const { error } =
+        await supabase
+          .from("notifications")
+          .update({
+            is_read: true,
+          })
+          .eq("user_id", user.id)
+          .eq("is_read", false);
 
-    if (!error) {
-      await loadNotifications(user.id);
-    }
-  };
+      if (!error) {
+        await loadNotifications(user.id);
+      }
+    };
+
+  /* ---------------- ADMIN USERS ---------------- */
 
   const updateUserActive = async (
     userId: string,
     active: boolean
   ) => {
-    const { error } = await supabase
-      .from("profiles")
-      .update({ is_active: active })
-      .eq("id", userId);
+    const { error } =
+      await supabase
+        .from("profiles")
+        .update({
+          is_active: active,
+        })
+        .eq("id", userId);
 
     if (error) {
       setMessage(
@@ -703,18 +801,31 @@ export default function App() {
     );
 
     await loadUsers();
+
+    if (selectedUser?.id === userId) {
+      setSelectedUser(
+        (prev) =>
+          prev
+            ? {
+                ...prev,
+                is_active: active,
+              }
+            : null
+      );
+    }
   };
 
   const updateUserVerified = async (
     userId: string,
     verified: boolean
   ) => {
-    const { error } = await supabase
-      .from("profiles")
-      .update({
-        is_verified: verified,
-      })
-      .eq("id", userId);
+    const { error } =
+      await supabase
+        .from("profiles")
+        .update({
+          is_verified: verified,
+        })
+        .eq("id", userId);
 
     if (error) {
       setMessage(
@@ -743,10 +854,13 @@ export default function App() {
       return;
     }
 
-    const { error } = await supabase
-      .from("profiles")
-      .update({ role: newRole })
-      .eq("id", userId);
+    const { error } =
+      await supabase
+        .from("profiles")
+        .update({
+          role: newRole,
+        })
+        .eq("id", userId);
 
     if (error) {
       setMessage(
@@ -755,17 +869,26 @@ export default function App() {
       return;
     }
 
-    setMessage("👤 User role update ho gaya.");
+    setMessage(
+      "👤 User role update ho gaya."
+    );
+
     await loadUsers();
   };
+
+  /* ---------------- ADMIN PAYMENTS ---------------- */
 
   const updatePaymentStatus = async (
     paymentId: string,
     status: string
   ) => {
-    const values: Record<string, unknown> = {
+    const values: Record<
+      string,
+      unknown
+    > = {
       payment_status: status,
-      updated_at: new Date().toISOString(),
+      updated_at:
+        new Date().toISOString(),
     };
 
     if (status === "paid") {
@@ -773,10 +896,11 @@ export default function App() {
         new Date().toISOString();
     }
 
-    const { error } = await supabase
-      .from("payments")
-      .update(values)
-      .eq("id", paymentId);
+    const { error } =
+      await supabase
+        .from("payments")
+        .update(values)
+        .eq("id", paymentId);
 
     if (error) {
       setMessage(
@@ -794,16 +918,22 @@ export default function App() {
 
   const createPayment = async () => {
     if (!user || !paymentAmount.trim()) {
-      setMessage("💰 Amount bharna zaroori hai.");
+      setMessage(
+        "💰 Amount bharna zaroori hai."
+      );
       return;
     }
 
-    const amount = Number(
-      paymentAmount
-    );
+    const amount =
+      Number(paymentAmount);
 
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setMessage("💰 Valid amount daalo.");
+    if (
+      !Number.isFinite(amount) ||
+      amount <= 0
+    ) {
+      setMessage(
+        "💰 Valid amount daalo."
+      );
       return;
     }
 
@@ -811,14 +941,20 @@ export default function App() {
 
     const selectedRequest =
       requests.find(
-        (r) => r.id === paymentRequestId
+        (r) =>
+          r.id === paymentRequestId
       );
 
     let customerId =
-      selectedRequest?.user_id || null;
+      selectedRequest?.user_id ||
+      null;
 
     let providerId =
-      selectedRequest?.provider_id || null;
+      selectedRequest?.provider_id ||
+      null;
+
+    let matchId: string | null =
+      null;
 
     if (paymentRequestId) {
       const { data: match } =
@@ -836,6 +972,8 @@ export default function App() {
           .maybeSingle();
 
       if (match) {
+        matchId = match.id;
+
         providerId =
           match.provider_id ||
           match.worker_id ||
@@ -843,28 +981,41 @@ export default function App() {
       }
     }
 
+    /*
+      Platform fee currently 0.
+      Later admin-configurable fee can be
+      added without changing payment records.
+    */
+
     const platformFee = 0;
     const providerAmount =
       amount - platformFee;
 
-    const { error } = await supabase
-      .from("payments")
-      .insert({
-        request_id:
-          paymentRequestId || null,
-        customer_id: customerId,
-        provider_id: providerId,
-        amount,
-        platform_fee: platformFee,
-        provider_amount: providerAmount,
-        payment_method: paymentMethod,
-        transaction_id:
-          paymentTransactionId.trim() ||
-          null,
-        payment_status: "pending",
-        notes:
-          paymentNotes.trim() || null,
-      });
+    const { error } =
+      await supabase
+        .from("payments")
+        .insert({
+          request_id:
+            paymentRequestId ||
+            null,
+          match_id: matchId,
+          customer_id: customerId,
+          provider_id: providerId,
+          amount,
+          platform_fee: platformFee,
+          provider_amount:
+            providerAmount,
+          payment_method:
+            paymentMethod,
+          transaction_id:
+            paymentTransactionId.trim() ||
+            null,
+          payment_status:
+            "pending",
+          notes:
+            paymentNotes.trim() ||
+            null,
+        });
 
     setSavingPayment(false);
 
@@ -888,223 +1039,342 @@ export default function App() {
     await loadPayments();
   };
 
-  const customerRequests = useMemo(() => {
-    if (!user) return [];
+  /* ---------------- MAPS / STATS ---------------- */
 
-    return requests.filter(
-      (r) => r.user_id === user.id
-    );
-  }, [requests, user]);
+  const requestMap =
+    useMemo(() => {
+      const map: Record<
+        string,
+        RequestRow
+      > = {};
 
-  const providerRequests = useMemo(
-    () => requests,
-    [requests]
-  );
+      requests.forEach((r) => {
+        map[r.id] = r;
+      });
 
-  const requestMap = useMemo(() => {
-    const map: Record<
-      string,
-      RequestRow
-    > = {};
+      return map;
+    }, [requests]);
 
-    requests.forEach((r) => {
-      map[r.id] = r;
-    });
+  const userMap =
+    useMemo(() => {
+      const map: Record<
+        string,
+        Profile
+      > = {};
 
-    return map;
-  }, [requests]);
+      users.forEach((u) => {
+        map[u.id] = u;
+      });
 
-  const userMap = useMemo(() => {
-    const map: Record<
-      string,
-      Profile
-    > = {};
+      return map;
+    }, [users]);
 
-    users.forEach((u) => {
-      map[u.id] = u;
-    });
+  const customerRequests =
+    useMemo(() => {
+      if (!user) return [];
 
-    return map;
-  }, [users]);
-
-  const adminStats = useMemo(() => {
-    const totalUsers = users.length;
-
-    const customers = users.filter(
-      (u) =>
-        String(u.role).toLowerCase() ===
-        "customer"
-    ).length;
-
-    const providers = users.filter(
-      (u) =>
-        ["provider", "worker"].includes(
-          String(u.role).toLowerCase()
-        )
-    ).length;
-
-    const pendingRequests =
-      requests.filter(
-        (r) =>
-          r.status === STATUS.pending
-      ).length;
-
-    const activeJobs =
-      requests.filter(
-        (r) =>
-          r.status === STATUS.accepted ||
-          r.status === STATUS.in_progress
-      ).length;
-
-    const completed =
-      requests.filter(
-        (r) =>
-          r.status === STATUS.completed
-      ).length;
-
-    const pendingPayments =
-      payments.filter(
-        (p) =>
-          p.payment_status === "pending"
-      ).length;
-
-    const paidAmount = payments
-      .filter(
-        (p) =>
-          p.payment_status === "paid"
-      )
-      .reduce(
-        (sum, p) =>
-          sum + Number(p.amount || 0),
-        0
+      return requests.filter(
+        (r) => r.user_id === user.id
       );
+    }, [requests, user]);
 
-    return {
-      totalUsers,
-      customers,
-      providers,
-      requests: requests.length,
-      pendingRequests,
-      activeJobs,
-      completed,
-      matches: matches.length,
-      pendingPayments,
-      paidAmount,
-    };
-  }, [
-    users,
-    requests,
-    matches,
-    payments,
-  ]);
+  const providerRequests =
+    useMemo(
+      () => requests,
+      [requests]
+    );
+
+  const adminStats =
+    useMemo(() => {
+      const totalUsers =
+        users.length;
+
+      const customers =
+        users.filter(
+          (u) =>
+            String(u.role)
+              .toLowerCase() ===
+            "customer"
+        ).length;
+
+      const providers =
+        users.filter((u) =>
+          [
+            "provider",
+            "worker",
+            "service_provider",
+          ].includes(
+            String(u.role).toLowerCase()
+          )
+        ).length;
+
+      const activeUsers =
+        users.filter(
+          (u) => u.is_active
+        ).length;
+
+      const verifiedUsers =
+        users.filter(
+          (u) => u.is_verified
+        ).length;
+
+      const pendingRequests =
+        requests.filter(
+          (r) =>
+            r.status ===
+            STATUS.pending
+        ).length;
+
+      const activeJobs =
+        requests.filter(
+          (r) =>
+            r.status ===
+              STATUS.accepted ||
+            r.status ===
+              STATUS.in_progress
+        ).length;
+
+      const completed =
+        requests.filter(
+          (r) =>
+            r.status ===
+            STATUS.completed
+        ).length;
+
+      const cancelled =
+        requests.filter(
+          (r) =>
+            r.status ===
+            STATUS.cancelled
+        ).length;
+
+      const pendingPayments =
+        payments.filter(
+          (p) =>
+            p.payment_status ===
+            "pending"
+        ).length;
+
+      const paidAmount =
+        payments
+          .filter(
+            (p) =>
+              p.payment_status ===
+              "paid"
+          )
+          .reduce(
+            (sum, p) =>
+              sum +
+              Number(
+                p.amount || 0
+              ),
+            0
+          );
+
+      const platformRevenue =
+        payments
+          .filter(
+            (p) =>
+              p.payment_status ===
+              "paid"
+          )
+          .reduce(
+            (sum, p) =>
+              sum +
+              Number(
+                p.platform_fee ||
+                  0
+              ),
+            0
+          );
+
+      const providerPayout =
+        payments
+          .filter(
+            (p) =>
+              p.payment_status ===
+              "paid"
+          )
+          .reduce(
+            (sum, p) =>
+              sum +
+              Number(
+                p.provider_amount ||
+                  0
+              ),
+            0
+          );
+
+      const refundedAmount =
+        payments
+          .filter(
+            (p) =>
+              p.payment_status ===
+              "refunded"
+          )
+          .reduce(
+            (sum, p) =>
+              sum +
+              Number(
+                p.amount || 0
+              ),
+            0
+          );
+
+      return {
+        totalUsers,
+        customers,
+        providers,
+        activeUsers,
+        verifiedUsers,
+        requests: requests.length,
+        pendingRequests,
+        activeJobs,
+        completed,
+        cancelled,
+        matches: matches.length,
+        pendingPayments,
+        paidAmount,
+        platformRevenue,
+        providerPayout,
+        refundedAmount,
+      };
+    }, [
+      users,
+      requests,
+      matches,
+      payments,
+    ]);
 
   const filteredAdminRequests =
     useMemo(() => {
       const search =
-        adminSearch.trim().toLowerCase();
+        adminSearch
+          .trim()
+          .toLowerCase();
 
-      return requests.filter((r) => {
-        const matchesStatus =
-          requestFilter === "all" ||
-          r.status === requestFilter;
+      return requests.filter(
+        (r) => {
+          const matchesStatus =
+            requestFilter ===
+              "all" ||
+            r.status ===
+              requestFilter;
 
-        const matchesSearch =
-          !search ||
-          String(r.need || "")
-            .toLowerCase()
-            .includes(search) ||
-          String(r.location || "")
-            .toLowerCase()
-            .includes(search) ||
-          String(r.category || "")
-            .toLowerCase()
-            .includes(search) ||
-          String(r.id || "")
-            .toLowerCase()
-            .includes(search);
+          const matchesSearch =
+            !search ||
+            String(r.need || "")
+              .toLowerCase()
+              .includes(search) ||
+            String(r.location || "")
+              .toLowerCase()
+              .includes(search) ||
+            String(r.category || "")
+              .toLowerCase()
+              .includes(search) ||
+            String(r.id || "")
+              .toLowerCase()
+              .includes(search);
 
-        return (
-          matchesStatus &&
-          matchesSearch
-        );
-      });
+          return (
+            matchesStatus &&
+            matchesSearch
+          );
+        }
+      );
     }, [
       requests,
       requestFilter,
       adminSearch,
     ]);
 
-  const filteredUsers = useMemo(() => {
-    const search =
-      adminSearch.trim().toLowerCase();
+  const filteredUsers =
+    useMemo(() => {
+      const search =
+        adminSearch
+          .trim()
+          .toLowerCase();
 
-    if (!search) return users;
+      if (!search)
+        return users;
 
-    return users.filter((u) =>
-      [
-        u.full_name,
-        u.phone,
-        u.role,
-        u.preferred_address,
-        u.service_area,
-        u.id,
-      ]
-        .filter(Boolean)
-        .some((value) =>
-          String(value)
-            .toLowerCase()
-            .includes(search)
-        )
-    );
-  }, [users, adminSearch]);
+      return users.filter((u) =>
+        [
+          u.full_name,
+          u.phone,
+          u.role,
+          u.preferred_address,
+          u.service_area,
+          u.id,
+        ]
+          .filter(Boolean)
+          .some((value) =>
+            String(value)
+              .toLowerCase()
+              .includes(search)
+          )
+      );
+    }, [users, adminSearch]);
 
   const filteredPayments =
     useMemo(() => {
       const search =
-        adminSearch.trim().toLowerCase();
+        adminSearch
+          .trim()
+          .toLowerCase();
 
-      return payments.filter((p) => {
-        const matchesStatus =
-          paymentFilter === "all" ||
-          p.payment_status ===
-            paymentFilter;
+      return payments.filter(
+        (p) => {
+          const matchesStatus =
+            paymentFilter ===
+              "all" ||
+            p.payment_status ===
+              paymentFilter;
 
-        const customer =
-          p.customer_id
-            ? userMap[p.customer_id]
-            : null;
+          const customer =
+            p.customer_id
+              ? userMap[
+                  p.customer_id
+                ]
+              : null;
 
-        const provider =
-          p.provider_id
-            ? userMap[p.provider_id]
-            : null;
+          const provider =
+            p.provider_id
+              ? userMap[
+                  p.provider_id
+                ]
+              : null;
 
-        const matchesSearch =
-          !search ||
-          String(p.id || "")
-            .toLowerCase()
-            .includes(search) ||
-          String(
-            p.transaction_id || ""
-          )
-            .toLowerCase()
-            .includes(search) ||
-          String(
-            customer?.full_name || ""
-          )
-            .toLowerCase()
-            .includes(search) ||
-          String(
-            provider?.full_name || ""
-          )
-            .toLowerCase()
-            .includes(search);
+          const matchesSearch =
+            !search ||
+            String(p.id || "")
+              .toLowerCase()
+              .includes(search) ||
+            String(
+              p.transaction_id ||
+                ""
+            )
+              .toLowerCase()
+              .includes(search) ||
+            String(
+              customer?.full_name ||
+                ""
+            )
+              .toLowerCase()
+              .includes(search) ||
+            String(
+              provider?.full_name ||
+                ""
+            )
+              .toLowerCase()
+              .includes(search);
 
-        return (
-          matchesStatus &&
-          matchesSearch
-        );
-      });
+          return (
+            matchesStatus &&
+            matchesSearch
+          );
+        }
+      );
     }, [
       payments,
       paymentFilter,
@@ -1112,19 +1382,25 @@ export default function App() {
       userMap,
     ]);
 
+  /* ---------------- LOADING ---------------- */
+
   if (loading) {
     return (
       <div className="app-loading">
         <div className="loading-logo">
           💡😎
         </div>
+
         <h2>JUGAAD</h2>
+
         <p>
           Jugaad machine garam ho rahi hai...
         </p>
       </div>
     );
   }
+
+  /* ---------------- LOGIN ---------------- */
 
   if (!user) {
     return (
@@ -1143,18 +1419,36 @@ export default function App() {
           <button
             className="primary-btn"
             onClick={async () => {
-              setMessage(
-                "🔐 Login flow app ke existing Auth screen se chalega."
-              );
+              const {
+                error,
+              } =
+                await supabase.auth.signInWithOAuth(
+                  {
+                    provider:
+                      "google",
+                    options: {
+                      redirectTo:
+                        window
+                          .location
+                          .origin,
+                    },
+                  }
+                );
+
+              if (error) {
+                setMessage(
+                  `❌ Login nahi hua: ${error.message}`
+                );
+              }
             }}
           >
-            JUGAAD Karo →
+            🔐 Google se Login →
           </button>
 
           <p className="small-note">
-            Login ke baad JUGAAD khud samajh
-            jayega ki Customer, Provider ya
-            Admin kaun hai.
+            Login ke baad JUGAAD khud
+            samajh jayega ki Customer,
+            Provider ya Admin kaun hai.
           </p>
 
           {message && (
@@ -1167,10 +1461,15 @@ export default function App() {
     );
   }
 
+  /* =========================================================
+     ADMIN CONTROL ROOM
+     ========================================================= */
+
   if (isAdmin) {
     return (
       <div className="admin-app">
         <aside className="admin-sidebar">
+
           <div className="admin-brand">
             <div className="admin-logo">
               💡😎
@@ -1178,14 +1477,23 @@ export default function App() {
 
             <div>
               <strong>JUGAAD</strong>
-              <span>CONTROL ROOM</span>
+              <span>
+                CONTROL ROOM
+              </span>
             </div>
           </div>
 
+          <div className="admin-live">
+            <span />
+            LIVE CONTROL ROOM
+          </div>
+
           <nav className="admin-nav">
+
             <button
               className={
-                adminSection === "dashboard"
+                adminSection ===
+                "dashboard"
                   ? "active"
                   : ""
               }
@@ -1200,7 +1508,8 @@ export default function App() {
 
             <button
               className={
-                adminSection === "requests"
+                adminSection ===
+                "requests"
                   ? "active"
                   : ""
               }
@@ -1211,11 +1520,21 @@ export default function App() {
               }
             >
               📋 Requests
+
+              {adminStats.pendingRequests >
+                0 && (
+                <span className="nav-badge">
+                  {
+                    adminStats.pendingRequests
+                  }
+                </span>
+              )}
             </button>
 
             <button
               className={
-                adminSection === "matches"
+                adminSection ===
+                "matches"
                   ? "active"
                   : ""
               }
@@ -1230,7 +1549,8 @@ export default function App() {
 
             <button
               className={
-                adminSection === "users"
+                adminSection ===
+                "users"
                   ? "active"
                   : ""
               }
@@ -1245,7 +1565,8 @@ export default function App() {
 
             <button
               className={
-                adminSection === "payments"
+                adminSection ===
+                "payments"
                   ? "active"
                   : ""
               }
@@ -1256,6 +1577,15 @@ export default function App() {
               }
             >
               💳 Payments
+
+              {adminStats.pendingPayments >
+                0 && (
+                <span className="nav-badge">
+                  {
+                    adminStats.pendingPayments
+                  }
+                </span>
+              )}
             </button>
 
             <button
@@ -1272,7 +1602,9 @@ export default function App() {
               }
             >
               🔔 Notifications
-              {unreadCount > 0 && (
+
+              {unreadCount >
+                0 && (
                 <span className="nav-badge">
                   {unreadCount}
                 </span>
@@ -1281,6 +1613,7 @@ export default function App() {
           </nav>
 
           <div className="admin-sidebar-bottom">
+
             <div className="admin-user-mini">
               <div className="avatar">
                 👨‍💼
@@ -1309,24 +1642,31 @@ export default function App() {
         </aside>
 
         <main className="admin-main">
+
           <header className="admin-topbar">
+
             <div>
               <h1>
                 {adminSection ===
                   "dashboard" &&
                   "Dashboard"}
+
                 {adminSection ===
                   "requests" &&
                   "All Requests"}
+
                 {adminSection ===
                   "matches" &&
-                  "Matches"}
+                  "Matches & Jobs"}
+
                 {adminSection ===
                   "users" &&
-                  "Users"}
+                  "User Management"}
+
                 {adminSection ===
                   "payments" &&
-                  "Payments"}
+                  "Payment Control"}
+
                 {adminSection ===
                   "notifications" &&
                   "Notifications"}
@@ -1338,6 +1678,7 @@ export default function App() {
             </div>
 
             <div className="admin-top-actions">
+
               <button
                 className="icon-btn"
                 onClick={() =>
@@ -1347,7 +1688,9 @@ export default function App() {
                 }
               >
                 🔔
-                {unreadCount > 0 && (
+
+                {unreadCount >
+                  0 && (
                   <span>
                     {unreadCount}
                   </span>
@@ -1375,9 +1718,11 @@ export default function App() {
           </header>
 
           <div className="admin-content">
+
             {message && (
               <div className="admin-message">
                 {message}
+
                 <button
                   onClick={() =>
                     setMessage("")
@@ -1388,16 +1733,51 @@ export default function App() {
               </div>
             )}
 
+            {/* ================= DASHBOARD ================= */}
+
             {adminSection ===
               "dashboard" && (
               <>
                 <div className="admin-stats">
+
                   <div className="stat-card">
                     <span>👥</span>
                     <div>
-                      <small>Total Users</small>
+                      <small>
+                        Total Users
+                      </small>
                       <strong>
-                        {adminStats.totalUsers}
+                        {
+                          adminStats.totalUsers
+                        }
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="stat-card">
+                    <span>🟢</span>
+                    <div>
+                      <small>
+                        Active Users
+                      </small>
+                      <strong>
+                        {
+                          adminStats.activeUsers
+                        }
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="stat-card">
+                    <span>🧰</span>
+                    <div>
+                      <small>
+                        Providers
+                      </small>
+                      <strong>
+                        {
+                          adminStats.providers
+                        }
                       </strong>
                     </div>
                   </div>
@@ -1405,32 +1785,13 @@ export default function App() {
                   <div className="stat-card">
                     <span>📋</span>
                     <div>
-                      <small>Requests</small>
+                      <small>
+                        Requests
+                      </small>
                       <strong>
-                        {adminStats.requests}
-                      </strong>
-                    </div>
-                  </div>
-
-                  <div className="stat-card">
-                    <span>🤝</span>
-                    <div>
-                      <small>Matches</small>
-                      <strong>
-                        {adminStats.matches}
-                      </strong>
-                    </div>
-                  </div>
-
-                  <div className="stat-card">
-                    <span>💳</span>
-                    <div>
-                      <small>Paid Amount</small>
-                      <strong>
-                        ₹
-                        {adminStats.paidAmount.toLocaleString(
-                          "en-IN"
-                        )}
+                        {
+                          adminStats.requests
+                        }
                       </strong>
                     </div>
                   </div>
@@ -1438,7 +1799,9 @@ export default function App() {
                   <div className="stat-card">
                     <span>⏳</span>
                     <div>
-                      <small>Pending Requests</small>
+                      <small>
+                        Pending
+                      </small>
                       <strong>
                         {
                           adminStats.pendingRequests
@@ -1450,19 +1813,28 @@ export default function App() {
                   <div className="stat-card">
                     <span>🛠️</span>
                     <div>
-                      <small>Active Jobs</small>
+                      <small>
+                        Active Jobs
+                      </small>
                       <strong>
-                        {adminStats.activeJobs}
+                        {
+                          adminStats.activeJobs
+                        }
                       </strong>
                     </div>
                   </div>
 
                   <div className="stat-card">
-                    <span>✅</span>
+                    <span>💳</span>
                     <div>
-                      <small>Completed</small>
+                      <small>
+                        Paid Amount
+                      </small>
                       <strong>
-                        {adminStats.completed}
+                        ₹
+                        {adminStats.paidAmount.toLocaleString(
+                          "en-IN"
+                        )}
                       </strong>
                     </div>
                   </div>
@@ -1470,56 +1842,226 @@ export default function App() {
                   <div className="stat-card">
                     <span>💰</span>
                     <div>
-                      <small>Pending Payments</small>
+                      <small>
+                        Platform Revenue
+                      </small>
+                      <strong>
+                        ₹
+                        {adminStats.platformRevenue.toLocaleString(
+                          "en-IN"
+                        )}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="stat-card">
+                    <span>🏦</span>
+                    <div>
+                      <small>
+                        Provider Payout
+                      </small>
+                      <strong>
+                        ₹
+                        {adminStats.providerPayout.toLocaleString(
+                          "en-IN"
+                        )}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="stat-card">
+                    <span>↩️</span>
+                    <div>
+                      <small>
+                        Refunds
+                      </small>
+                      <strong>
+                        ₹
+                        {adminStats.refundedAmount.toLocaleString(
+                          "en-IN"
+                        )}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="stat-card">
+                    <span>✅</span>
+                    <div>
+                      <small>
+                        Completed
+                      </small>
                       <strong>
                         {
-                          adminStats.pendingPayments
+                          adminStats.completed
+                        }
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="stat-card">
+                    <span>❌</span>
+                    <div>
+                      <small>
+                        Cancelled
+                      </small>
+                      <strong>
+                        {
+                          adminStats.cancelled
                         }
                       </strong>
                     </div>
                   </div>
                 </div>
 
+                <div className="admin-quick-grid">
+
+                  <button
+                    className="admin-quick-card"
+                    onClick={() =>
+                      setAdminSection(
+                        "requests"
+                      )
+                    }
+                  >
+                    <span>🚨</span>
+                    <strong>
+                      Pending Requests
+                    </strong>
+                    <small>
+                      {
+                        adminStats.pendingRequests
+                      }{" "}
+                      waiting
+                    </small>
+                  </button>
+
+                  <button
+                    className="admin-quick-card"
+                    onClick={() =>
+                      setAdminSection(
+                        "payments"
+                      )
+                    }
+                  >
+                    <span>💳</span>
+                    <strong>
+                      Payment Queries
+                    </strong>
+                    <small>
+                      {
+                        adminStats.pendingPayments
+                      }{" "}
+                      pending
+                    </small>
+                  </button>
+
+                  <button
+                    className="admin-quick-card"
+                    onClick={() =>
+                      setAdminSection(
+                        "users"
+                      )
+                    }
+                  >
+                    <span>🛡️</span>
+                    <strong>
+                      Verification
+                    </strong>
+                    <small>
+                      {
+                        users.filter(
+                          (u) =>
+                            !u.is_verified
+                        ).length
+                      }{" "}
+                      need review
+                    </small>
+                  </button>
+
+                  <button
+                    className="admin-quick-card"
+                    onClick={() =>
+                      setAdminSection(
+                        "matches"
+                      )
+                    }
+                  >
+                    <span>🔥</span>
+                    <strong>
+                      Active Jobs
+                    </strong>
+                    <small>
+                      {
+                        adminStats.activeJobs
+                      }{" "}
+                      running
+                    </small>
+                  </button>
+                </div>
+
                 <section className="admin-panel">
+
                   <div className="panel-heading">
                     <div>
                       <h2>
-                        Recent Requests
+                        🚨 Latest Activity
                       </h2>
+
                       <p>
-                        Customer ki latest
-                        requirements
+                        Control room ki latest
+                        activity.
                       </p>
                     </div>
 
                     <button
                       className="outline-btn"
                       onClick={() =>
-                        setAdminSection(
-                          "requests"
-                        )
+                        loadAdminData()
                       }
                     >
-                      View All →
+                      ↻ Refresh
                     </button>
                   </div>
 
                   <div className="request-table-wrap">
                     <table className="admin-table">
+
                       <thead>
                         <tr>
-                          <th>Requirement</th>
-                          <th>Location</th>
-                          <th>Status</th>
-                          <th>Date</th>
+                          <th>
+                            Requirement
+                          </th>
+                          <th>
+                            Customer
+                          </th>
+                          <th>
+                            Location
+                          </th>
+                          <th>
+                            Status
+                          </th>
+                          <th>
+                            Time
+                          </th>
                         </tr>
                       </thead>
 
                       <tbody>
                         {requests
-                          .slice(0, 8)
+                          .slice(0, 10)
                           .map((r) => (
-                            <tr key={r.id}>
+                            <tr
+                              key={r.id}
+                              onClick={() =>
+                                setSelectedRequest(
+                                  r
+                                )
+                              }
+                              style={{
+                                cursor:
+                                  "pointer",
+                              }}
+                            >
                               <td>
                                 <strong>
                                   {r.need ||
@@ -1533,9 +2075,19 @@ export default function App() {
                               </td>
 
                               <td>
+                                {r.user_id
+                                  ? userMap[
+                                      r.user_id
+                                    ]
+                                      ?.full_name ||
+                                    "Customer"
+                                  : "Unknown"}
+                              </td>
+
+                              <td>
                                 📍{" "}
                                 {r.location ||
-                                  "Location not given"}
+                                  "Not given"}
                               </td>
 
                               <td>
@@ -1561,7 +2113,7 @@ export default function App() {
                           0 && (
                           <tr>
                             <td
-                              colSpan={4}
+                              colSpan={5}
                               className="empty-cell"
                             >
                               Abhi koi request
@@ -1576,21 +2128,27 @@ export default function App() {
               </>
             )}
 
+            {/* ================= REQUESTS ================= */}
+
             {adminSection ===
               "requests" && (
               <section className="admin-panel">
+
                 <div className="panel-heading">
+
                   <div>
                     <h2>
-                      All Customer Requests
+                      📋 Customer Requests
                     </h2>
+
                     <p>
-                      Har requirement yahin se
-                      manage karo.
+                      Har requirement ko
+                      control karo.
                     </p>
                   </div>
 
                   <div className="toolbar">
+
                     <input
                       value={adminSearch}
                       onChange={(e) =>
@@ -1598,7 +2156,7 @@ export default function App() {
                           e.target.value
                         )
                       }
-                      placeholder="🔎 Search request..."
+                      placeholder="🔎 Search..."
                     />
 
                     <select
@@ -1610,20 +2168,25 @@ export default function App() {
                       }
                     >
                       <option value="all">
-                        All Status
+                        All
                       </option>
+
                       <option value="pending">
                         Pending
                       </option>
+
                       <option value="accepted">
                         Accepted
                       </option>
+
                       <option value="in_progress">
                         In Progress
                       </option>
+
                       <option value="completed">
                         Completed
                       </option>
+
                       <option value="cancelled">
                         Cancelled
                       </option>
@@ -1632,11 +2195,14 @@ export default function App() {
                 </div>
 
                 <div className="request-admin-grid">
+
                   {filteredAdminRequests.map(
                     (r) => {
                       const customer =
                         r.user_id
-                          ? userMap[r.user_id]
+                          ? userMap[
+                              r.user_id
+                            ]
                           : null;
 
                       const provider =
@@ -1651,7 +2217,9 @@ export default function App() {
                           className="request-admin-card"
                           key={r.id}
                         >
+
                           <div className="card-top">
+
                             <span className="category-chip">
                               {r.category ||
                                 "Other"}
@@ -1678,14 +2246,15 @@ export default function App() {
                           </p>
 
                           <div className="request-meta">
+
                             <div>
                               <small>
                                 Customer
                               </small>
+
                               <strong>
                                 {customer
                                   ?.full_name ||
-                                  r.user_id ||
                                   "Unknown"}
                               </strong>
                             </div>
@@ -1694,10 +2263,10 @@ export default function App() {
                               <small>
                                 Provider
                               </small>
+
                               <strong>
                                 {provider
                                   ?.full_name ||
-                                  r.provider_id ||
                                   "Not assigned"}
                               </strong>
                             </div>
@@ -1706,6 +2275,7 @@ export default function App() {
                               <small>
                                 Created
                               </small>
+
                               <strong>
                                 {formatDate(
                                   r.created_at ||
@@ -1716,6 +2286,17 @@ export default function App() {
                           </div>
 
                           <div className="card-actions">
+
+                            <button
+                              onClick={() =>
+                                setSelectedRequest(
+                                  r
+                                )
+                              }
+                            >
+                              👁 Details
+                            </button>
+
                             {r.status ===
                               "pending" && (
                               <button
@@ -1770,7 +2351,7 @@ export default function App() {
                                   );
                                 }}
                               >
-                                💳 Create Payment
+                                💳 Payment
                               </button>
                             )}
                           </div>
@@ -1783,12 +2364,14 @@ export default function App() {
                     0 && (
                     <div className="empty-state">
                       <div>📭</div>
+
                       <h3>
                         Koi request nahi mili
                       </h3>
+
                       <p>
-                        Search/filter thoda
-                        halka karo 😄
+                        Search/filter change
+                        karo 😄
                       </p>
                     </div>
                   )}
@@ -1796,22 +2379,36 @@ export default function App() {
               </section>
             )}
 
+            {/* ================= MATCHES ================= */}
+
             {adminSection ===
               "matches" && (
               <section className="admin-panel">
+
                 <div className="panel-heading">
                   <div>
                     <h2>
-                      All Matches
+                      🤝 Matches & Jobs
                     </h2>
+
                     <p>
-                      Customer aur provider
-                      connections.
+                      Customer ↔ Provider
+                      connection.
                     </p>
                   </div>
+
+                  <button
+                    className="outline-btn"
+                    onClick={() =>
+                      loadAdminData()
+                    }
+                  >
+                    ↻ Refresh
+                  </button>
                 </div>
 
                 <div className="match-admin-grid">
+
                   {matches.map((m) => {
                     const request =
                       requestMap[
@@ -1844,11 +2441,13 @@ export default function App() {
                         className="match-admin-card"
                         key={m.id}
                       >
+
                         <div className="match-icon">
                           🤝
                         </div>
 
                         <div className="match-main">
+
                           <h3>
                             {request?.need ||
                               "Request"}
@@ -1861,10 +2460,12 @@ export default function App() {
                           </p>
 
                           <div className="match-people">
+
                             <div>
                               <small>
                                 Customer
                               </small>
+
                               <strong>
                                 {customer
                                   ?.full_name ||
@@ -1876,6 +2477,7 @@ export default function App() {
                               <small>
                                 Provider
                               </small>
+
                               <strong>
                                 {provider
                                   ?.full_name ||
@@ -1886,6 +2488,7 @@ export default function App() {
                         </div>
 
                         <div>
+
                           <span
                             className={`status status-${matchStatus}`}
                           >
@@ -1905,14 +2508,30 @@ export default function App() {
                               )}
                             </strong>
                           )}
+
+                          <small
+                            style={{
+                              display:
+                                "block",
+                              marginTop:
+                                "8px",
+                            }}
+                          >
+                            {m.distance_km !=
+                            null
+                              ? `📍 ${m.distance_km} km`
+                              : ""}
+                          </small>
                         </div>
                       </div>
                     );
                   })}
 
-                  {matches.length === 0 && (
+                  {matches.length ===
+                    0 && (
                     <div className="empty-state">
                       <div>🤝</div>
+
                       <h3>
                         Abhi match nahi hai
                       </h3>
@@ -1922,17 +2541,22 @@ export default function App() {
               </section>
             )}
 
+            {/* ================= USERS ================= */}
+
             {adminSection ===
               "users" && (
               <section className="admin-panel">
+
                 <div className="panel-heading">
+
                   <div>
                     <h2>
-                      User Management
+                      👥 User Management
                     </h2>
+
                     <p>
-                      Customer aur providers
-                      manage karo.
+                      Customer, Provider,
+                      Worker sab manage karo.
                     </p>
                   </div>
 
@@ -1944,19 +2568,68 @@ export default function App() {
                           e.target.value
                         )
                       }
-                      placeholder="🔎 Search user..."
+                      placeholder="🔎 Name / phone / role..."
                     />
                   </div>
                 </div>
 
+                <div className="payment-summary">
+
+                  <div>
+                    <small>
+                      Total
+                    </small>
+                    <strong>
+                      {users.length}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <small>
+                      Customers
+                    </small>
+                    <strong>
+                      {
+                        adminStats.customers
+                      }
+                    </strong>
+                  </div>
+
+                  <div>
+                    <small>
+                      Providers
+                    </small>
+                    <strong>
+                      {
+                        adminStats.providers
+                      }
+                    </strong>
+                  </div>
+
+                  <div>
+                    <small>
+                      Verified
+                    </small>
+                    <strong>
+                      {
+                        adminStats.verifiedUsers
+                      }
+                    </strong>
+                  </div>
+
+                </div>
+
                 <div className="user-admin-grid">
+
                   {filteredUsers.map(
                     (u) => (
                       <div
                         className="user-admin-card"
                         key={u.id}
                       >
+
                         <div className="user-card-head">
+
                           <div className="big-avatar">
                             {u.avatar_url ? (
                               <img
@@ -1989,14 +2662,16 @@ export default function App() {
                         </div>
 
                         <div className="user-info">
+
                           <div>
                             <small>
                               Verification
                             </small>
+
                             <strong>
                               {u.is_verified
                                 ? "✅ Verified"
-                                : "⚠️ Not Verified"}
+                                : "⚠️ Review"}
                             </strong>
                           </div>
 
@@ -2004,6 +2679,7 @@ export default function App() {
                             <small>
                               Status
                             </small>
+
                             <strong>
                               {u.is_active
                                 ? "🟢 Active"
@@ -2015,6 +2691,7 @@ export default function App() {
                             <small>
                               Rating
                             </small>
+
                             <strong>
                               ⭐{" "}
                               {u.rating ??
@@ -2026,6 +2703,7 @@ export default function App() {
                             <small>
                               Completed
                             </small>
+
                             <strong>
                               {u.completed_job ??
                                 0}
@@ -2034,6 +2712,17 @@ export default function App() {
                         </div>
 
                         <div className="user-actions">
+
+                          <button
+                            onClick={() =>
+                              setSelectedUser(
+                                u
+                              )
+                            }
+                          >
+                            👁 Details
+                          </button>
+
                           <select
                             value={
                               u.role ||
@@ -2053,15 +2742,19 @@ export default function App() {
                             <option value="customer">
                               Customer
                             </option>
+
                             <option value="provider">
                               Provider
                             </option>
+
                             <option value="worker">
                               Worker
                             </option>
+
                             <option value="student">
                               Student
                             </option>
+
                             <option value="government">
                               Government
                             </option>
@@ -2105,6 +2798,7 @@ export default function App() {
                     0 && (
                     <div className="empty-state">
                       <div>👥</div>
+
                       <h3>
                         User nahi mila
                       </h3>
@@ -2114,22 +2808,28 @@ export default function App() {
               </section>
             )}
 
+            {/* ================= PAYMENTS ================= */}
+
             {adminSection ===
               "payments" && (
               <section className="admin-panel">
+
                 <div className="panel-heading">
+
                   <div>
                     <h2>
                       💳 Payment Control Room
                     </h2>
+
                     <p>
-                      Payment queries,
-                      verification aur
-                      status management.
+                      Har paisa traceable,
+                      transparent aur
+                      verifiable.
                     </p>
                   </div>
 
                   <div className="toolbar">
+
                     <input
                       value={adminSearch}
                       onChange={(e) =>
@@ -2137,7 +2837,7 @@ export default function App() {
                           e.target.value
                         )
                       }
-                      placeholder="🔎 Search payment..."
+                      placeholder="🔎 UTR / customer / provider..."
                     />
 
                     <select
@@ -2149,20 +2849,25 @@ export default function App() {
                       }
                     >
                       <option value="all">
-                        All Payments
+                        All
                       </option>
+
                       <option value="pending">
                         Pending
                       </option>
+
                       <option value="paid">
                         Paid
                       </option>
+
                       <option value="failed">
                         Failed
                       </option>
+
                       <option value="refunded">
                         Refunded
                       </option>
+
                       <option value="cancelled">
                         Cancelled
                       </option>
@@ -2176,12 +2881,13 @@ export default function App() {
                         )
                       }
                     >
-                      + New Payment
+                      + New Query
                     </button>
                   </div>
                 </div>
 
                 <div className="payment-summary">
+
                   <div>
                     <small>
                       Total Queries
@@ -2204,7 +2910,7 @@ export default function App() {
 
                   <div>
                     <small>
-                      Paid Value
+                      Paid
                     </small>
                     <strong>
                       ₹
@@ -2213,24 +2919,71 @@ export default function App() {
                       )}
                     </strong>
                   </div>
+
+                  <div>
+                    <small>
+                      Revenue
+                    </small>
+                    <strong>
+                      ₹
+                      {adminStats.platformRevenue.toLocaleString(
+                        "en-IN"
+                      )}
+                    </strong>
+                  </div>
+
+                  <div>
+                    <small>
+                      Provider Payout
+                    </small>
+                    <strong>
+                      ₹
+                      {adminStats.providerPayout.toLocaleString(
+                        "en-IN"
+                      )}
+                    </strong>
+                  </div>
+
                 </div>
 
                 <div className="payment-table-wrap">
+
                   <table className="admin-table">
+
                     <thead>
                       <tr>
-                        <th>Payment</th>
-                        <th>Customer</th>
-                        <th>Provider</th>
-                        <th>Amount</th>
-                        <th>Method</th>
-                        <th>Transaction</th>
-                        <th>Status</th>
-                        <th>Action</th>
+                        <th>
+                          Payment
+                        </th>
+                        <th>
+                          Customer
+                        </th>
+                        <th>
+                          Provider
+                        </th>
+                        <th>
+                          Amount
+                        </th>
+                        <th>
+                          Fee
+                        </th>
+                        <th>
+                          Provider Gets
+                        </th>
+                        <th>
+                          Method / UTR
+                        </th>
+                        <th>
+                          Status
+                        </th>
+                        <th>
+                          Action
+                        </th>
                       </tr>
                     </thead>
 
                     <tbody>
+
                       {filteredPayments.map(
                         (p) => {
                           const customer =
@@ -2248,7 +3001,19 @@ export default function App() {
                               : null;
 
                           return (
-                            <tr key={p.id}>
+                            <tr
+                              key={p.id}
+                              onClick={() =>
+                                setSelectedPayment(
+                                  p
+                                )
+                              }
+                              style={{
+                                cursor:
+                                  "pointer",
+                              }}
+                            >
+
                               <td>
                                 <strong>
                                   #
@@ -2290,13 +3055,35 @@ export default function App() {
                               </td>
 
                               <td>
-                                {p.payment_method ||
-                                  "—"}
+                                ₹
+                                {Number(
+                                  p.platform_fee ||
+                                    0
+                                ).toLocaleString(
+                                  "en-IN"
+                                )}
                               </td>
 
                               <td>
-                                {p.transaction_id ||
-                                  "Not added"}
+                                ₹
+                                {Number(
+                                  p.provider_amount ||
+                                    0
+                                ).toLocaleString(
+                                  "en-IN"
+                                )}
+                              </td>
+
+                              <td>
+                                <strong>
+                                  {p.payment_method ||
+                                    "—"}
+                                </strong>
+
+                                <small>
+                                  {p.transaction_id ||
+                                    "UTR not added"}
+                                </small>
                               </td>
 
                               <td>
@@ -2311,29 +3098,43 @@ export default function App() {
 
                               <td>
                                 <div className="payment-actions">
+
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedPayment(
+                                        p
+                                      );
+                                    }}
+                                  >
+                                    👁
+                                  </button>
+
                                   {p.payment_status ===
                                     "pending" && (
                                     <>
                                       <button
-                                        onClick={() =>
+                                        onClick={(e) => {
+                                          e.stopPropagation();
                                           updatePaymentStatus(
                                             p.id,
                                             "paid"
-                                          )
-                                        }
+                                          );
+                                        }}
                                       >
-                                        ✅ Paid
+                                        ✅
                                       </button>
 
                                       <button
-                                        onClick={() =>
+                                        onClick={(e) => {
+                                          e.stopPropagation();
                                           updatePaymentStatus(
                                             p.id,
                                             "failed"
-                                          )
-                                        }
+                                          );
+                                        }}
                                       >
-                                        ❌ Fail
+                                        ❌
                                       </button>
                                     </>
                                   )}
@@ -2341,16 +3142,18 @@ export default function App() {
                                   {p.payment_status ===
                                     "paid" && (
                                     <button
-                                      onClick={() =>
+                                      onClick={(e) => {
+                                        e.stopPropagation();
                                         updatePaymentStatus(
                                           p.id,
                                           "refunded"
-                                        )
-                                      }
+                                        );
+                                      }}
                                     >
-                                      ↩️ Refund
+                                      ↩️
                                     </button>
                                   )}
+
                                 </div>
                               </td>
                             </tr>
@@ -2362,7 +3165,7 @@ export default function App() {
                         0 && (
                         <tr>
                           <td
-                            colSpan={8}
+                            colSpan={9}
                             className="empty-cell"
                           >
                             Abhi payment query
@@ -2370,38 +3173,62 @@ export default function App() {
                           </td>
                         </tr>
                       )}
+
                     </tbody>
                   </table>
                 </div>
               </section>
             )}
 
+            {/* ================= NOTIFICATIONS ================= */}
+
             {adminSection ===
               "notifications" && (
               <section className="admin-panel">
+
                 <div className="panel-heading">
+
                   <div>
                     <h2>
                       🔔 Notifications
                     </h2>
+
                     <p>
-                      JUGAAD activity alerts.
+                      Important JUGAAD
+                      events.
                     </p>
                   </div>
 
-                  {unreadCount > 0 && (
+                  <div className="toolbar">
+
+                    {unreadCount >
+                      0 && (
+                      <button
+                        className="outline-btn"
+                        onClick={
+                          markAllNotificationsRead
+                        }
+                      >
+                        ✓ Mark all read
+                      </button>
+                    )}
+
                     <button
                       className="outline-btn"
-                      onClick={
-                        markAllNotificationsRead
+                      onClick={() =>
+                        user &&
+                        loadNotifications(
+                          user.id
+                        )
                       }
                     >
-                      Mark all read
+                      ↻ Refresh
                     </button>
-                  )}
+                  </div>
                 </div>
 
                 <div className="notification-admin-list">
+
                   {notifications.map(
                     (n) => (
                       <div
@@ -2417,6 +3244,7 @@ export default function App() {
                           )
                         }
                       >
+
                         <div className="notification-icon">
                           {n.type ===
                           "new_request"
@@ -2428,6 +3256,7 @@ export default function App() {
                         </div>
 
                         <div>
+
                           <strong>
                             {n.title}
                           </strong>
@@ -2441,6 +3270,7 @@ export default function App() {
                               n.created_at
                             )}
                           </small>
+
                         </div>
 
                         {!n.is_read && (
@@ -2454,6 +3284,7 @@ export default function App() {
                     0 && (
                     <div className="empty-state">
                       <div>🔔</div>
+
                       <h3>
                         No notifications
                       </h3>
@@ -2465,9 +3296,626 @@ export default function App() {
           </div>
         </main>
 
-        {paymentFormOpen && (
+        {/* ================= REQUEST DETAIL ================= */}
+
+        {selectedRequest && (
           <div className="modal-backdrop">
             <div className="payment-modal">
+
+              <button
+                className="modal-close"
+                onClick={() =>
+                  setSelectedRequest(
+                    null
+                  )
+                }
+              >
+                ×
+              </button>
+
+              <h2>
+                📋 Request Details
+              </h2>
+
+              <p>
+                Complete request
+                information.
+              </p>
+
+              <div className="user-info">
+
+                <div>
+                  <small>
+                    Requirement
+                  </small>
+
+                  <strong>
+                    {selectedRequest.need ||
+                      "—"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Category
+                  </small>
+
+                  <strong>
+                    {selectedRequest.category ||
+                      "Other"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Location
+                  </small>
+
+                  <strong>
+                    📍{" "}
+                    {selectedRequest.location ||
+                      "Not given"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Status
+                  </small>
+
+                  <strong>
+                    {statusLabel(
+                      selectedRequest.status
+                    )}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Customer
+                  </small>
+
+                  <strong>
+                    {selectedRequest.user_id
+                      ? userMap[
+                          selectedRequest.user_id
+                        ]?.full_name ||
+                        selectedRequest.user_id
+                      : "Unknown"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Provider
+                  </small>
+
+                  <strong>
+                    {selectedRequest.provider_id
+                      ? userMap[
+                          selectedRequest.provider_id
+                        ]?.full_name ||
+                        selectedRequest.provider_id
+                      : "Not assigned"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Created
+                  </small>
+
+                  <strong>
+                    {formatDate(
+                      selectedRequest.created_at ||
+                        selectedRequest.create_at
+                    )}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Request ID
+                  </small>
+
+                  <strong>
+                    {selectedRequest.id}
+                  </strong>
+                </div>
+              </div>
+
+              <div className="card-actions">
+
+                {selectedRequest.status ===
+                  "pending" && (
+                  <button
+                    onClick={() =>
+                      updateRequestStatus(
+                        selectedRequest.id,
+                        "cancelled"
+                      )
+                    }
+                  >
+                    ❌ Cancel
+                  </button>
+                )}
+
+                {selectedRequest.status ===
+                  "accepted" && (
+                  <button
+                    onClick={() =>
+                      updateRequestStatus(
+                        selectedRequest.id,
+                        "in_progress"
+                      )
+                    }
+                  >
+                    🛠️ Start Job
+                  </button>
+                )}
+
+                {selectedRequest.status ===
+                  "in_progress" && (
+                  <button
+                    onClick={() =>
+                      updateRequestStatus(
+                        selectedRequest.id,
+                        "completed"
+                      )
+                    }
+                  >
+                    ✅ Complete Job
+                  </button>
+                )}
+
+                {selectedRequest.status ===
+                  "completed" && (
+                  <button
+                    className="primary-small-btn"
+                    onClick={() => {
+                      setPaymentRequestId(
+                        selectedRequest.id
+                      );
+                      setSelectedRequest(
+                        null
+                      );
+                      setPaymentFormOpen(
+                        true
+                      );
+                    }}
+                  >
+                    💳 Create Payment Query
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================= USER DETAIL ================= */}
+
+        {selectedUser && (
+          <div className="modal-backdrop">
+            <div className="payment-modal">
+
+              <button
+                className="modal-close"
+                onClick={() =>
+                  setSelectedUser(null)
+                }
+              >
+                ×
+              </button>
+
+              <h2>
+                👤 User Details
+              </h2>
+
+              <p>
+                Complete profile
+                information.
+              </p>
+
+              <div className="user-card-head">
+
+                <div className="big-avatar">
+                  {selectedUser.avatar_url ? (
+                    <img
+                      src={
+                        selectedUser.avatar_url
+                      }
+                      alt=""
+                    />
+                  ) : (
+                    "👤"
+                  )}
+                </div>
+
+                <div>
+                  <h3>
+                    {selectedUser.full_name ||
+                      "Unnamed User"}
+                  </h3>
+
+                  <p>
+                    {selectedUser.phone ||
+                      "Phone not added"}
+                  </p>
+
+                  <span className="role-chip">
+                    {selectedUser.role ||
+                      "customer"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="user-info">
+
+                <div>
+                  <small>
+                    Verification
+                  </small>
+
+                  <strong>
+                    {selectedUser.is_verified
+                      ? "✅ Verified"
+                      : "⚠️ Not Verified"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Account
+                  </small>
+
+                  <strong>
+                    {selectedUser.is_active
+                      ? "🟢 Active"
+                      : "🔴 Inactive"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Rating
+                  </small>
+
+                  <strong>
+                    ⭐{" "}
+                    {selectedUser.rating ??
+                      "—"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Completed Jobs
+                  </small>
+
+                  <strong>
+                    {selectedUser.completed_job ??
+                      0}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Address
+                  </small>
+
+                  <strong>
+                    {selectedUser.preferred_address ||
+                      "Not added"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Service Area
+                  </small>
+
+                  <strong>
+                    {selectedUser.service_area ||
+                      "Not added"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    User ID
+                  </small>
+
+                  <strong>
+                    {selectedUser.id}
+                  </strong>
+                </div>
+              </div>
+
+              <div className="card-actions">
+
+                <button
+                  onClick={() =>
+                    updateUserVerified(
+                      selectedUser.id,
+                      !Boolean(
+                        selectedUser.is_verified
+                      )
+                    )
+                  }
+                >
+                  {selectedUser.is_verified
+                    ? "⚠️ Unverify"
+                    : "✅ Verify"}
+                </button>
+
+                <button
+                  onClick={() =>
+                    updateUserActive(
+                      selectedUser.id,
+                      !Boolean(
+                        selectedUser.is_active
+                      )
+                    )
+                  }
+                >
+                  {selectedUser.is_active
+                    ? "🔴 Deactivate"
+                    : "🟢 Activate"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================= PAYMENT DETAIL ================= */}
+
+        {selectedPayment && (
+          <div className="modal-backdrop">
+            <div className="payment-modal">
+
+              <button
+                className="modal-close"
+                onClick={() =>
+                  setSelectedPayment(
+                    null
+                  )
+                }
+              >
+                ×
+              </button>
+
+              <h2>
+                💳 Payment Details
+              </h2>
+
+              <p>
+                Transparent payment
+                record.
+              </p>
+
+              <div className="user-info">
+
+                <div>
+                  <small>
+                    Payment ID
+                  </small>
+
+                  <strong>
+                    {selectedPayment.id}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Amount
+                  </small>
+
+                  <strong>
+                    ₹
+                    {Number(
+                      selectedPayment.amount ||
+                        0
+                    ).toLocaleString(
+                      "en-IN"
+                    )}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Platform Fee
+                  </small>
+
+                  <strong>
+                    ₹
+                    {Number(
+                      selectedPayment.platform_fee ||
+                        0
+                    ).toLocaleString(
+                      "en-IN"
+                    )}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Provider Amount
+                  </small>
+
+                  <strong>
+                    ₹
+                    {Number(
+                      selectedPayment.provider_amount ||
+                        0
+                    ).toLocaleString(
+                      "en-IN"
+                    )}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Customer
+                  </small>
+
+                  <strong>
+                    {selectedPayment.customer_id
+                      ? userMap[
+                          selectedPayment.customer_id
+                        ]?.full_name ||
+                        selectedPayment.customer_id
+                      : "—"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Provider
+                  </small>
+
+                  <strong>
+                    {selectedPayment.provider_id
+                      ? userMap[
+                          selectedPayment.provider_id
+                        ]?.full_name ||
+                        selectedPayment.provider_id
+                      : "—"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Method
+                  </small>
+
+                  <strong>
+                    {selectedPayment.payment_method ||
+                      "—"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    UTR / Transaction
+                  </small>
+
+                  <strong>
+                    {selectedPayment.transaction_id ||
+                      "Not added"}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Status
+                  </small>
+
+                  <strong>
+                    {paymentLabel(
+                      selectedPayment.payment_status
+                    )}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Created
+                  </small>
+
+                  <strong>
+                    {formatDate(
+                      selectedPayment.created_at
+                    )}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Paid At
+                  </small>
+
+                  <strong>
+                    {formatDate(
+                      selectedPayment.paid_at
+                    )}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Notes
+                  </small>
+
+                  <strong>
+                    {selectedPayment.notes ||
+                      "No notes"}
+                  </strong>
+                </div>
+              </div>
+
+              <div className="card-actions">
+
+                {selectedPayment.payment_status ===
+                  "pending" && (
+                  <>
+                    <button
+                      onClick={() => {
+                        updatePaymentStatus(
+                          selectedPayment.id,
+                          "paid"
+                        );
+                        setSelectedPayment(
+                          null
+                        );
+                      }}
+                    >
+                      ✅ Mark Paid
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        updatePaymentStatus(
+                          selectedPayment.id,
+                          "failed"
+                        );
+                        setSelectedPayment(
+                          null
+                        );
+                      }}
+                    >
+                      ❌ Failed
+                    </button>
+                  </>
+                )}
+
+                {selectedPayment.payment_status ===
+                  "paid" && (
+                  <button
+                    onClick={() => {
+                      updatePaymentStatus(
+                        selectedPayment.id,
+                        "refunded"
+                      );
+                      setSelectedPayment(
+                        null
+                      );
+                    }}
+                  >
+                    ↩️ Refund
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================= NEW PAYMENT ================= */}
+
+        {paymentFormOpen && (
+          <div className="modal-backdrop">
+
+            <div className="payment-modal">
+
               <button
                 className="modal-close"
                 onClick={() =>
@@ -2484,11 +3932,13 @@ export default function App() {
               </h2>
 
               <p>
-                Payment details add karo.
+                Payment details transparent
+                tareeke se add karo.
               </p>
 
               <label>
                 Request
+
                 <select
                   value={paymentRequestId}
                   onChange={(e) =>
@@ -2518,6 +3968,7 @@ export default function App() {
 
               <label>
                 Amount ₹
+
                 <input
                   type="number"
                   value={paymentAmount}
@@ -2532,6 +3983,7 @@ export default function App() {
 
               <label>
                 Payment Method
+
                 <select
                   value={paymentMethod}
                   onChange={(e) =>
@@ -2543,12 +3995,15 @@ export default function App() {
                   <option value="UPI">
                     UPI
                   </option>
+
                   <option value="Cash">
                     Cash
                   </option>
+
                   <option value="Bank Transfer">
                     Bank Transfer
                   </option>
+
                   <option value="Other">
                     Other
                   </option>
@@ -2557,6 +4012,7 @@ export default function App() {
 
               <label>
                 Transaction ID / UTR
+
                 <input
                   value={
                     paymentTransactionId
@@ -2572,6 +4028,7 @@ export default function App() {
 
               <label>
                 Notes
+
                 <textarea
                   value={paymentNotes}
                   onChange={(e) =>
@@ -2583,14 +4040,61 @@ export default function App() {
                 />
               </label>
 
+              <div className="payment-summary">
+
+                <div>
+                  <small>
+                    Customer pays
+                  </small>
+
+                  <strong>
+                    ₹
+                    {Number(
+                      paymentAmount || 0
+                    ).toLocaleString(
+                      "en-IN"
+                    )}
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Platform fee
+                  </small>
+
+                  <strong>
+                    ₹0
+                  </strong>
+                </div>
+
+                <div>
+                  <small>
+                    Provider gets
+                  </small>
+
+                  <strong>
+                    ₹
+                    {Number(
+                      paymentAmount || 0
+                    ).toLocaleString(
+                      "en-IN"
+                    )}
+                  </strong>
+                </div>
+              </div>
+
               <button
                 className="primary-btn"
-                disabled={savingPayment}
-                onClick={createPayment}
+                disabled={
+                  savingPayment
+                }
+                onClick={
+                  createPayment
+                }
               >
                 {savingPayment
                   ? "Saving..."
-                  : "💳 Create Payment"}
+                  : "💳 Create Payment Query"}
               </button>
             </div>
           </div>
@@ -2599,16 +4103,26 @@ export default function App() {
     );
   }
 
+  /* =========================================================
+     CUSTOMER / PROVIDER UI
+     ========================================================= */
+
   return (
     <div className="app">
+
       <header className="user-topbar">
+
         <div className="brand">
+
           <div className="brand-logo">
             💡😎
           </div>
 
           <div>
-            <strong>JUGAAD</strong>
+            <strong>
+              JUGAAD
+            </strong>
+
             <small>
               Har zarurat ka jugaad 🇮🇳
             </small>
@@ -2616,6 +4130,7 @@ export default function App() {
         </div>
 
         <div className="top-actions">
+
           <button
             className="notification-button"
             onClick={() =>
@@ -2625,7 +4140,9 @@ export default function App() {
             }
           >
             🔔
-            {unreadCount > 0 && (
+
+            {unreadCount >
+              0 && (
               <span>
                 {unreadCount}
               </span>
@@ -2644,12 +4161,15 @@ export default function App() {
 
         {showNotifications && (
           <div className="notification-dropdown">
+
             <div className="dropdown-head">
+
               <strong>
                 Notifications
               </strong>
 
-              {unreadCount > 0 && (
+              {unreadCount >
+                0 && (
                 <button
                   onClick={
                     markAllNotificationsRead
@@ -2679,7 +4199,11 @@ export default function App() {
                   <strong>
                     {n.title}
                   </strong>
-                  <p>{n.message}</p>
+
+                  <p>
+                    {n.message}
+                  </p>
+
                   <small>
                     {formatDate(
                       n.created_at
@@ -2699,9 +4223,12 @@ export default function App() {
       </header>
 
       <main className="user-main">
+
         {message && (
           <div className="toast">
+
             {message}
+
             <button
               onClick={() =>
                 setMessage("")
@@ -2714,8 +4241,11 @@ export default function App() {
 
         {tab === "home" && (
           <>
+
             <section className="hero">
+
               <div>
+
                 <span className="hero-badge">
                   🇮🇳 Desi Help Network
                 </span>
@@ -2723,6 +4253,7 @@ export default function App() {
                 <h1>
                   Jo chahiye,
                   <br />
+
                   <span>
                     JUGAAD se milega.
                   </span>
@@ -2737,17 +4268,22 @@ export default function App() {
 
               <div className="hero-mascot">
                 💡
-                <span>😎</span>
+                <span>
+                  😎
+                </span>
               </div>
             </section>
 
             {isProvider ? (
               <section className="request-box provider-box">
+
                 <div className="section-title">
+
                   <div>
                     <span>
                       🧰 PROVIDER MODE
                     </span>
+
                     <h2>
                       Kaunsa kaam pakadna hai?
                     </h2>
@@ -2755,6 +4291,7 @@ export default function App() {
                 </div>
 
                 <div className="provider-job-list">
+
                   {providerRequests
                     .filter(
                       (r) =>
@@ -2768,7 +4305,9 @@ export default function App() {
                         className="job-card"
                         key={r.id}
                       >
+
                         <div>
+
                           <span className="category-chip">
                             {r.category ||
                               "Other"}
@@ -2786,6 +4325,7 @@ export default function App() {
                         </div>
 
                         <div>
+
                           {r.provider_id ===
                           user.id ? (
                             <span
@@ -2819,10 +4359,14 @@ export default function App() {
                         user.id
                   ).length === 0 && (
                     <div className="empty-state">
-                      <div>🛵</div>
+                      <div>
+                        🛵
+                      </div>
+
                       <h3>
                         Abhi kaam nahi hai
                       </h3>
+
                       <p>
                         Thoda chai piyo ☕,
                         notification aayega.
@@ -2833,11 +4377,14 @@ export default function App() {
               </section>
             ) : (
               <section className="request-box">
+
                 <div className="section-title">
+
                   <div>
                     <span>
                       JUGAAD START KARO
                     </span>
+
                     <h2>
                       Aapko kis cheez ki
                       zarurat hai?
@@ -2859,6 +4406,7 @@ export default function App() {
                 />
 
                 <div className="category-row">
+
                   {categories.map(
                     (item) => (
                       <button
@@ -2882,7 +4430,11 @@ export default function App() {
                 </div>
 
                 <div className="location-input">
-                  <span>📍</span>
+
+                  <span>
+                    📍
+                  </span>
+
                   <input
                     value={location}
                     onChange={(e) =>
@@ -2914,11 +4466,14 @@ export default function App() {
             )}
 
             <section className="services-section">
+
               <div className="section-title">
+
                 <div>
                   <span>
                     POPULAR JUGAAD
                   </span>
+
                   <h2>
                     Log kya mangwa rahe hain?
                   </h2>
@@ -2935,6 +4490,7 @@ export default function App() {
               </div>
 
               <div className="service-grid">
+
                 {services.map(
                   (service) => (
                     <button
@@ -2968,13 +4524,17 @@ export default function App() {
 
         {tab === "explore" && (
           <section className="page-section">
+
             <div className="page-heading">
+
               <span>
                 🔎 EXPLORE
               </span>
+
               <h1>
                 Kis cheez ka JUGAAD chahiye?
               </h1>
+
               <p>
                 Category choose karo ya
                 seedha requirement likho.
@@ -2982,6 +4542,7 @@ export default function App() {
             </div>
 
             <div className="explore-grid">
+
               {services.map(
                 (service) => (
                   <button
@@ -2996,12 +4557,15 @@ export default function App() {
                     <span>
                       {service.icon}
                     </span>
+
                     <h3>
                       {service.name}
                     </h3>
+
                     <p>
                       {service.category}
                     </p>
+
                     <strong>
                       JUGAAD Karo →
                     </strong>
@@ -3014,13 +4578,17 @@ export default function App() {
 
         {tab === "requests" && (
           <section className="page-section">
+
             <div className="page-heading">
+
               <span>
                 📋 MERI REQUESTS
               </span>
+
               <h1>
                 Aapke saare JUGAAD
               </h1>
+
               <p>
                 Kaam kaha tak pahucha,
                 yahin dikhega.
@@ -3028,8 +4596,10 @@ export default function App() {
             </div>
 
             <div className="customer-request-list">
+
               {customerRequests.map(
                 (r) => {
+
                   const match =
                     matches.find(
                       (m) =>
@@ -3056,7 +4626,9 @@ export default function App() {
                       className="customer-request-card"
                       key={r.id}
                     >
+
                       <div className="request-card-head">
+
                         <span className="category-chip">
                           {r.category ||
                             "Other"}
@@ -3083,6 +4655,7 @@ export default function App() {
 
                       {provider && (
                         <div className="provider-found">
+
                           <div className="provider-avatar">
                             👨‍🔧
                           </div>
@@ -3091,11 +4664,13 @@ export default function App() {
                             <small>
                               JUGAAD mil gaya
                             </small>
+
                             <strong>
                               {
                                 provider.full_name
                               }
                             </strong>
+
                             <span>
                               ⭐{" "}
                               {provider.rating ??
@@ -3106,6 +4681,7 @@ export default function App() {
                       )}
 
                       <div className="request-card-bottom">
+
                         <small>
                           {formatDate(
                             r.created_at ||
@@ -3149,10 +4725,15 @@ export default function App() {
               {customerRequests.length ===
                 0 && (
                 <div className="empty-state">
-                  <div>💡</div>
+
+                  <div>
+                    💡
+                  </div>
+
                   <h3>
                     Abhi koi JUGAAD nahi
                   </h3>
+
                   <p>
                     Pehla kaam batao, hum
                     jugaad lagate hain 😎
@@ -3174,13 +4755,17 @@ export default function App() {
 
         {tab === "profile" && (
           <section className="page-section">
+
             <div className="page-heading">
+
               <span>
                 👤 PROFILE
               </span>
+
               <h1>
                 Apna JUGAAD profile
               </h1>
+
               <p>
                 Details save karo taaki
                 kaam aur smooth ho.
@@ -3188,13 +4773,16 @@ export default function App() {
             </div>
 
             <div className="profile-card">
+
               <div className="profile-avatar">
                 👤
               </div>
 
               <div className="profile-form">
+
                 <label>
                   Full Name
+
                   <input
                     value={profileName}
                     onChange={(e) =>
@@ -3208,6 +4796,7 @@ export default function App() {
 
                 <label>
                   Phone
+
                   <input
                     value={profilePhone}
                     onChange={(e) =>
@@ -3221,6 +4810,7 @@ export default function App() {
 
                 <label>
                   Preferred Address
+
                   <textarea
                     value={profileAddress}
                     onChange={(e) =>
@@ -3233,6 +4823,7 @@ export default function App() {
                 </label>
 
                 <div className="profile-role">
+
                   <small>
                     Current Mode
                   </small>
@@ -3291,6 +4882,7 @@ export default function App() {
       </main>
 
       <nav className="bottom-nav">
+
         <button
           className={
             tab === "home"
@@ -3301,7 +4893,9 @@ export default function App() {
             setTab("home")
           }
         >
-          <span>🏠</span>
+          <span>
+            🏠
+          </span>
           Home
         </button>
 
@@ -3315,7 +4909,9 @@ export default function App() {
             setTab("explore")
           }
         >
-          <span>🔎</span>
+          <span>
+            🔎
+          </span>
           Explore
         </button>
 
@@ -3329,7 +4925,9 @@ export default function App() {
             setTab("requests")
           }
         >
-          <span>📋</span>
+          <span>
+            📋
+          </span>
           Requests
         </button>
 
@@ -3343,7 +4941,9 @@ export default function App() {
             setTab("profile")
           }
         >
-          <span>👤</span>
+          <span>
+            👤
+          </span>
           Profile
         </button>
       </nav>
