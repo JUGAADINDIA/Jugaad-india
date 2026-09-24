@@ -165,6 +165,8 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loginRole, setLoginRole] = useState<"customer" | "provider" | "admin">("customer");
+  const [profileLoading, setProfileLoading] = useState(false);
 
   const [tab, setTab] = useState("home");
   const [category, setCategory] = useState("Sab");
@@ -284,13 +286,17 @@ export default function App() {
   useEffect(() => {
     if (!user || !profile) return;
 
+    if (isProvider && tab === "explore") {
+      setTab("home");
+    }
+
     if (isAdmin) {
       loadAdminData();
     } else {
       loadRequests();
       loadMatches();
     }
-  }, [user, profile, isAdmin]);
+  }, [user, profile, isAdmin, isProvider, tab]);
 
   useEffect(() => {
     if (!user) return;
@@ -314,6 +320,8 @@ export default function App() {
   /* ---------------- LOADERS ---------------- */
 
   const loadProfile = async (userId: string) => {
+    setProfileLoading(true);
+
     const { data, error } = await supabase
       .from("profiles")
       .select("*")
@@ -322,18 +330,47 @@ export default function App() {
 
     if (error) {
       console.error("profile:", error);
+      setProfileLoading(false);
       return;
     }
 
-    if (data) {
-      setProfile(data as Profile);
-      setProfileName(data.full_name || "");
-      setProfilePhone(data.phone || "");
-      setProfileAddress(
-        data.preferred_address || ""
-      );
+    if (!data) {
+      setProfile(null);
+      setProfileLoading(false);
+      setMessage("❌ Profile nahi mila. Admin se role/profile verify karvao.");
+      await supabase.auth.signOut();
+      return;
     }
+
+    const loadedProfile = data as Profile;
+    const loadedRole = String(loadedProfile.role || "customer").toLowerCase();
+
+    const allowedRole =
+      loginRole === "admin"
+        ? loadedRole === "admin" || loadedRole === "super_admin"
+        : loginRole === "provider"
+          ? loadedRole === "provider" ||
+            loadedRole === "worker" ||
+            loadedRole === "service_provider"
+          : loadedRole === "customer";
+
+    if (!allowedRole) {
+      setProfile(null);
+      setProfileLoading(false);
+      setMessage(
+        `🔐 Ye account ${loginRole} login ke liye allowed nahi hai. Apne ${loadedRole} login se sign in karo.`
+      );
+      await supabase.auth.signOut();
+      return;
+    }
+
+    setProfile(loadedProfile);
+    setProfileName(loadedProfile.full_name || "");
+    setProfilePhone(loadedProfile.phone || "");
+    setProfileAddress(loadedProfile.preferred_address || "");
+    setProfileLoading(false);
   };
+
 
   const loadRequests = async () => {
     if (!user) return;
@@ -497,6 +534,11 @@ export default function App() {
   const createRequest = async () => {
     if (!user) {
       setMessage("🔐 Pehle login karo.");
+      return;
+    }
+
+    if (isProvider || isAdmin) {
+      setMessage("🔐 Customer request sirf Customer account se banegi.");
       return;
     }
 
@@ -739,6 +781,12 @@ export default function App() {
   };
 
   const signOut = async () => {
+    setProfile(null);
+    setUser(null);
+    setProfileLoading(false);
+    setTab("home");
+    setAdminSection("dashboard");
+    setLoginRole("customer");
     await supabase.auth.signOut();
   };
 
@@ -1441,68 +1489,82 @@ export default function App() {
     );
   }
 
-  /* ---------------- LOGIN ---------------- */
+  /* ---------------- ROLE-BASED LOGIN ---------------- */
 
   if (!user) {
+    const login = async () => {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: window.location.origin,
+        },
+      });
+
+      if (error) {
+        setMessage(`❌ Login nahi hua: ${error.message}`);
+      }
+    };
+
     return (
       <div className="auth-screen">
         <div className="auth-card">
-          <div className="brand-big">
-            💡😎
+          <div className="brand-big">💡😎</div>
+          <h1>JUGAAD</h1>
+          <p>Har zarurat ka jugaad 🇮🇳</p>
+
+          <div style={{ display: "grid", gap: 12, marginTop: 24 }}>
+            <button
+              className="primary-btn large"
+              onClick={() => {
+                setLoginRole("customer");
+                login();
+              }}
+            >
+              🙋 Customer Login →
+            </button>
+
+            <button
+              className="secondary-btn"
+              onClick={() => {
+                setLoginRole("provider");
+                login();
+              }}
+            >
+              🧰 Provider Login →
+            </button>
+
+            <button
+              className="secondary-btn"
+              onClick={() => {
+                setLoginRole("admin");
+                login();
+              }}
+            >
+              🔐 Admin Login →
+            </button>
           </div>
 
-          <h1>JUGAAD</h1>
-
-          <p>
-            Har zarurat ka jugaad 🇮🇳
+          <p className="small-note" style={{ marginTop: 18 }}>
+            Customer ko sirf Customer interface, Provider ko sirf Provider
+            interface aur Admin ko sirf Admin Control Room milega.
           </p>
 
-          <button
-            className="google-login-btn"
-            onClick={async () => {
-              const {
-                error,
-              } =
-                await supabase.auth.signInWithOAuth(
-                  {
-                    provider:
-                      "google",
-                    options: {
-                      redirectTo:
-                        window
-                          .location
-                          .origin,
-                    },
-                  }
-                );
-
-              if (error) {
-                setMessage(
-                  `❌ Login nahi hua: ${error.message}`
-                );
-              }
-            }}
-          >
-            <span className="google-icon">G</span>
-            <span>Continue with Google</span>
-            <span className="google-arrow">→</span>
-          </button>
-
-          <p className="small-note">
-            Login ke baad JUGAAD khud
-            samajh jayega ki Customer,
-            Provider ya Admin kaun hai.
-          </p>
-
-          {message && (
-            <div className="toast">
-              {message}
-            </div>
-          )}
+          {message && <div className="toast">{message}</div>}
         </div>
       </div>
     );
   }
+
+  if (profileLoading || !profile) {
+    return (
+      <div className="app-loading">
+        <div className="loading-logo">💡😎</div>
+        <h2>JUGAAD</h2>
+        <p>Role check ho raha hai... 🔐</p>
+      </div>
+    );
+  }
+
 
   /* =========================================================
      ADMIN CONTROL ROOM
@@ -4352,16 +4414,23 @@ export default function App() {
               <div>
 
                 <span className="hero-badge">
-                  🇮🇳 Desi Help Network
+                  {isProvider ? "🧰 JUGAAD Provider Network" : "🇮🇳 Desi Help Network"}
                 </span>
 
                 <h1>
-                  Jo chahiye,
-                  <br />
-
-                  <span>
-                    JUGAAD se milega.
-                  </span>
+                  {isProvider ? (
+                    <>
+                      Kaam chahiye?
+                      <br />
+                      <span>JUGAAD par milega.</span>
+                    </>
+                  ) : (
+                    <>
+                      Jo chahiye,
+                      <br />
+                      <span>JUGAAD se milega.</span>
+                    </>
+                  )}
                 </h1>
 
                 <p>
@@ -4683,180 +4752,213 @@ export default function App() {
 
         {tab === "requests" && (
           <section className="page-section">
+            {isProvider ? (
+              <>
+                <div className="page-heading">
+                  <span>🧰 PROVIDER JOBS</span>
+                  <h1>Mere JUGAAD Jobs</h1>
+                  <p>Jo kaam aapne pakde hain, yahan manage karo.</p>
+                </div>
 
-            <div className="page-heading">
+                <div className="customer-request-list">
+                  {providerRequests
+                    .filter(
+                      (r) =>
+                        r.status === STATUS.pending ||
+                        r.provider_id === user.id
+                    )
+                    .map((r) => (
+                      <div
+                        className="customer-request-card"
+                        key={r.id}
+                      >
+                        <div className="request-card-head">
+                          <span className="category-chip">
+                            {r.category || "Other"}
+                          </span>
+                          <span className={`status status-${r.status}`}>
+                            {statusLabel(r.status)}
+                          </span>
+                        </div>
 
-              <span>
-                📋 MERI REQUESTS
-              </span>
+                        <h3>{r.need}</h3>
 
-              <h1>
-                Aapke saare JUGAAD
-              </h1>
+                        <p>
+                          📍 {r.location || "Location not given"}
+                        </p>
 
-              <p>
-                Kaam kaha tak pahucha,
-                yahin dikhega.
-              </p>
-            </div>
+                        <div className="request-card-bottom">
+                          <small>
+                            {formatDate(r.created_at || r.create_at)}
+                          </small>
 
-            <div className="customer-request-list">
+                          {r.status === STATUS.pending && (
+                            <button
+                              onClick={() => acceptRequest(r.id)}
+                            >
+                              🔥 Kaam Pakdo
+                            </button>
+                          )}
 
-              {customerRequests.map(
-                (r) => {
+                          {r.status === STATUS.accepted &&
+                            r.provider_id === user.id && (
+                              <button
+                                onClick={() =>
+                                  updateRequestStatus(
+                                    r.id,
+                                    STATUS.in_progress
+                                  )
+                                }
+                              >
+                                🛵 Kaam Start
+                              </button>
+                            )}
 
-                  const match =
-                    matches.find(
-                      (m) =>
-                        m.request_id ===
-                        r.id
+                          {r.status === STATUS.in_progress &&
+                            r.provider_id === user.id && (
+                              <button
+                                onClick={() =>
+                                  updateRequestStatus(
+                                    r.id,
+                                    STATUS.completed
+                                  )
+                                }
+                              >
+                                ✅ Kaam Complete
+                              </button>
+                            )}
+                        </div>
+                      </div>
+                    ))}
+
+                  {providerRequests.filter(
+                    (r) =>
+                      r.status === STATUS.pending ||
+                      r.provider_id === user.id
+                  ).length === 0 && (
+                    <div className="empty-state">
+                      <div>🛵</div>
+                      <h3>Abhi koi job nahi hai</h3>
+                      <p>Thoda chai piyo ☕, naya JUGAAD aayega.</p>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="page-heading">
+                  <span>📋 MERI REQUESTS</span>
+                  <h1>Aapke saare JUGAAD</h1>
+                  <p>Kaam kaha tak pahucha, yahin dikhega.</p>
+                </div>
+
+                <div className="customer-request-list">
+                  {customerRequests.map((r) => {
+                    const match = matches.find(
+                      (m) => m.request_id === r.id
                     );
 
-                  const providerId =
-                    match?.provider_id ||
-                    match?.worker_id ||
-                    r.provider_id;
+                    const providerId =
+                      match?.provider_id ||
+                      match?.worker_id ||
+                      r.provider_id;
 
-                  const provider =
-                    providerId
-                      ? users.find(
-                          (u) =>
-                            u.id ===
-                            providerId
-                        )
+                    const provider = providerId
+                      ? users.find((u) => u.id === providerId)
                       : null;
 
-                  return (
-                    <div
-                      className="customer-request-card"
-                      key={r.id}
-                    >
+                    return (
+                      <div
+                        className="customer-request-card"
+                        key={r.id}
+                      >
+                        <div className="request-card-head">
+                          <span className="category-chip">
+                            {r.category || "Other"}
+                          </span>
 
-                      <div className="request-card-head">
-
-                        <span className="category-chip">
-                          {r.category ||
-                            "Other"}
-                        </span>
-
-                        <span
-                          className={`status status-${r.status}`}
-                        >
-                          {statusLabel(
-                            r.status
-                          )}
-                        </span>
-                      </div>
-
-                      <h3>
-                        {r.need}
-                      </h3>
-
-                      <p>
-                        📍{" "}
-                        {r.location ||
-                          "Location not given"}
-                      </p>
-
-                      {provider && (
-                        <div className="provider-found">
-
-                          <div className="provider-avatar">
-                            👨‍🔧
-                          </div>
-
-                          <div>
-                            <small>
-                              JUGAAD mil gaya
-                            </small>
-
-                            <strong>
-                              {
-                                provider.full_name
-                              }
-                            </strong>
-
-                            <span>
-                              ⭐{" "}
-                              {provider.rating ??
-                                "New Provider"}
-                            </span>
-                          </div>
+                          <span
+                            className={`status status-${r.status}`}
+                          >
+                            {statusLabel(r.status)}
+                          </span>
                         </div>
-                      )}
 
-                      <div className="request-card-bottom">
+                        <h3>{r.need}</h3>
 
-                        <small>
-                          {formatDate(
-                            r.created_at ||
-                              r.create_at
+                        <p>
+                          📍 {r.location || "Location not given"}
+                        </p>
+
+                        {provider && (
+                          <div className="provider-found">
+                            <div className="provider-avatar">👨‍🔧</div>
+                            <div>
+                              <small>JUGAAD mil gaya</small>
+                              <strong>{provider.full_name}</strong>
+                              <span>
+                                ⭐ {provider.rating ?? "New Provider"}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="request-card-bottom">
+                          <small>
+                            {formatDate(r.created_at || r.create_at)}
+                          </small>
+
+                          {r.status === STATUS.accepted && (
+                            <button
+                              onClick={() =>
+                                updateRequestStatus(
+                                  r.id,
+                                  STATUS.in_progress
+                                )
+                              }
+                            >
+                              🛵 Kaam Start
+                            </button>
                           )}
-                        </small>
 
-                        {r.status ===
-                          "accepted" && (
-                          <button
-                            onClick={() =>
-                              updateRequestStatus(
-                                r.id,
-                                "in_progress"
-                              )
-                            }
-                          >
-                            🛵 Kaam Start
-                          </button>
-                        )}
-
-                        {r.status ===
-                          "in_progress" && (
-                          <button
-                            onClick={() =>
-                              updateRequestStatus(
-                                r.id,
-                                "completed"
-                              )
-                            }
-                          >
-                            ✅ Kaam Complete
-                          </button>
-                        )}
+                          {r.status === STATUS.in_progress && (
+                            <button
+                              onClick={() =>
+                                updateRequestStatus(
+                                  r.id,
+                                  STATUS.completed
+                                )
+                              }
+                            >
+                              ✅ Kaam Complete
+                            </button>
+                          )}
+                        </div>
                       </div>
+                    );
+                  })}
+
+                  {customerRequests.length === 0 && (
+                    <div className="empty-state">
+                      <div>💡</div>
+                      <h3>Abhi koi JUGAAD nahi</h3>
+                      <p>
+                        Pehla kaam batao, hum jugaad lagate hain 😎
+                      </p>
+                      <button
+                        className="primary-btn"
+                        onClick={() => setTab("home")}
+                      >
+                        JUGAAD Karo →
+                      </button>
                     </div>
-                  );
-                }
-              )}
-
-              {customerRequests.length ===
-                0 && (
-                <div className="empty-state">
-
-                  <div>
-                    💡
-                  </div>
-
-                  <h3>
-                    Abhi koi JUGAAD nahi
-                  </h3>
-
-                  <p>
-                    Pehla kaam batao, hum
-                    jugaad lagate hain 😎
-                  </p>
-
-                  <button
-                    className="primary-btn"
-                    onClick={() =>
-                      setTab("home")
-                    }
-                  >
-                    JUGAAD Karo →
-                  </button>
+                  )}
                 </div>
-              )}
-            </div>
+              </>
+            )}
           </section>
         )}
+
 
         {tab === "profile" && (
           <section className="page-section">
@@ -4952,27 +5054,15 @@ export default function App() {
                     : "💾 Profile Save"}
                 </button>
 
-                {!isProvider && (
-                  <button
-                    className="secondary-btn"
-                    onClick={
-                      switchToProvider
-                    }
-                  >
-                    🧰 Provider Bano
-                  </button>
-                )}
-
-                {isProvider && (
-                  <button
-                    className="secondary-btn"
-                    onClick={
-                      switchToCustomer
-                    }
-                  >
-                    🙋 Customer Mode
-                  </button>
-                )}
+                <div className="profile-role">
+                  <small>Login Role</small>
+                  <strong>
+                    {isProvider ? "🧰 Provider" : "🙋 Customer"}
+                  </strong>
+                  <span style={{ display: "block", marginTop: 6, opacity: 0.75 }}>
+                    Role change yahan se nahi hoga.
+                  </span>
+                </div>
 
                 <button
                   className="danger-btn"
@@ -4987,69 +5077,45 @@ export default function App() {
       </main>
 
       <nav className="bottom-nav">
-
         <button
-          className={
-            tab === "home"
-              ? "active"
-              : ""
-          }
-          onClick={() =>
-            setTab("home")
-          }
+          className={tab === "home" ? "active" : ""}
+          onClick={() => setTab("home")}
         >
-          <span>
-            🏠
-          </span>
+          <span>🏠</span>
           Home
         </button>
 
+        {!isProvider && (
+          <button
+            className={tab === "explore" ? "active" : ""}
+            onClick={() => setTab("explore")}
+          >
+            <span>🔎</span>
+            Explore
+          </button>
+        )}
+
         <button
-          className={
-            tab === "explore"
-              ? "active"
-              : ""
-          }
-          onClick={() =>
-            setTab("explore")
-          }
+          className={tab === "requests" ? "active" : ""}
+          onClick={() => setTab("requests")}
         >
-          <span>
-            🔎
-          </span>
-          Explore
+          <span>{isProvider ? "🧰" : "📋"}</span>
+          {isProvider ? "Jobs" : "Requests"}
         </button>
 
         <button
-          className={
-            tab === "requests"
-              ? "active"
-              : ""
-          }
-          onClick={() =>
-            setTab("requests")
-          }
+          className={tab === "profile" ? "active" : ""}
+          onClick={() => setTab("profile")}
         >
-          <span>
-            📋
-          </span>
-          Requests
-        </button>
-
-        <button
-          className={
-            tab === "profile"
-              ? "active"
-              : ""
-          }
-          onClick={() =>
-            setTab("profile")
-          }
-        >
-          <span>
-            👤
-          </span>
+          <span>👤</span>
           Profile
+        </button>
+
+        <button
+          className="danger-btn"
+          onClick={signOut}
+        >
+          ↪ Logout
         </button>
       </nav>
     </div>
