@@ -165,7 +165,6 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [loginRole, setLoginRole] = useState<"customer" | "provider" | "admin">("customer");
   const [profileLoading, setProfileLoading] = useState(false);
 
   const [tab, setTab] = useState("home");
@@ -345,21 +344,13 @@ export default function App() {
     const loadedProfile = data as Profile;
     const loadedRole = String(loadedProfile.role || "customer").toLowerCase();
 
-    const allowedRole =
-      loginRole === "admin"
-        ? loadedRole === "admin" || loadedRole === "super_admin"
-        : loginRole === "provider"
-          ? loadedRole === "provider" ||
-            loadedRole === "worker" ||
-            loadedRole === "service_provider"
-          : loadedRole === "customer";
-
-    if (!allowedRole) {
+    // JUGAAD uses one common login link for every role.
+    // The role is taken only from the authenticated user's Supabase profile,
+    // so Customer, Provider and Admin automatically get their own interface.
+    if (!['customer', 'provider', 'worker', 'service_provider', 'admin', 'super_admin'].includes(loadedRole)) {
       setProfile(null);
       setProfileLoading(false);
-      setMessage(
-        `🔐 Ye account ${loginRole} login ke liye allowed nahi hai. Apne ${loadedRole} login se sign in karo.`
-      );
+      setMessage(`🔐 Is account ka role valid nahi hai: ${loadedRole}`);
       await supabase.auth.signOut();
       return;
     }
@@ -786,7 +777,6 @@ export default function App() {
     setProfileLoading(false);
     setTab("home");
     setAdminSection("dashboard");
-    setLoginRole("customer");
     await supabase.auth.signOut();
   };
 
@@ -1515,38 +1505,23 @@ export default function App() {
           <div style={{ display: "grid", gap: 12, marginTop: 24 }}>
             <button
               className="primary-btn large"
-              onClick={() => {
-                setLoginRole("customer");
-                login();
-              }}
+              onClick={login}
             >
               🙋 Customer Login →
             </button>
 
             <button
               className="secondary-btn"
-              onClick={() => {
-                setLoginRole("provider");
-                login();
-              }}
+              onClick={login}
             >
               🧰 Provider Login →
-            </button>
-
-            <button
-              className="secondary-btn"
-              onClick={() => {
-                setLoginRole("admin");
-                login();
-              }}
-            >
-              🔐 Admin Login →
             </button>
           </div>
 
           <p className="small-note" style={{ marginTop: 18 }}>
-            Customer ko sirf Customer interface, Provider ko sirf Provider
-            interface aur Admin ko sirf Admin Control Room milega.
+            🔗 Dono buttons ka login link ek hi hai. JUGAAD aapke account ka
+            role khud pehchan kar Customer, Provider ya Admin ka alag interface
+            kholega.
           </p>
 
           {message && <div className="toast">{message}</div>}
