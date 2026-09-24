@@ -720,63 +720,13 @@ export default function App() {
     );
   };
 
-  const switchToProvider = async () => {
-    if (!user) return;
-
-    const { error } =
-      await supabase
-        .from("profiles")
-        .upsert({
-          id: user.id,
-          role: "provider",
-          is_active: true,
-        });
-
-    if (error) {
-      setMessage(
-        `❌ Provider mode nahi laga: ${error.message}`
-      );
-      return;
-    }
-
-    await loadProfile(user.id);
-
-    setMessage(
-      "🧰 Provider mode ON! Ab kaam pakdo."
-    );
-  };
-
-  const switchToCustomer = async () => {
-    if (!user) return;
-
-    const { error } =
-      await supabase
-        .from("profiles")
-        .upsert({
-          id: user.id,
-          role: "customer",
-        });
-
-    if (error) {
-      setMessage(
-        `❌ Customer mode nahi laga: ${error.message}`
-      );
-      return;
-    }
-
-    await loadProfile(user.id);
-
-    setMessage(
-      "🙋 Customer mode ON!"
-    );
-  };
-
   const signOut = async () => {
     setProfile(null);
     setUser(null);
     setProfileLoading(false);
     setTab("home");
     setAdminSection("dashboard");
+    setMessage("");
     await supabase.auth.signOut();
   };
 
@@ -1775,6 +1725,14 @@ export default function App() {
                     {unreadCount}
                   </span>
                 )}
+              </button>
+
+              <button
+                className="logout-btn"
+                onClick={signOut}
+                title="Admin Logout"
+              >
+                🚪 Logout
               </button>
 
               <div className="admin-profile">
