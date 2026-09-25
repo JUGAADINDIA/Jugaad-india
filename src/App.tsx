@@ -199,9 +199,11 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [voiceSeconds, setVoiceSeconds] = useState(0);
   const [voiceBlob, setVoiceBlob] = useState<Blob | null>(null);
+  const [voiceTranscript, setVoiceTranscript] = useState("");
   const [matchedProviders, setMatchedProviders] = useState<ProviderMatch[]>([]);
   const [matchingRequestId, setMatchingRequestId] = useState("");
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const speechRecognitionRef = useRef<any>(null);
   const voiceChunksRef = useRef<Blob[]>([]);
   const voiceTimerRef = useRef<number | null>(null);
 
@@ -732,8 +734,91 @@ export default function App() {
   };
 
   const startVoiceRecording = async () => {
+    if (isRecording) return;
+
+    // Mobile Chrome/Android: use built-in speech recognition first.
+    // This puts the user's spoken words directly into the JUGAAD request,
+    // so voice does not depend on uploading an audio file to the server.
+    const SpeechRecognition =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
+
+    if (SpeechRecognition) {
+      try {
+        const recognition = new SpeechRecognition();
+        recognition.lang =
+          profile?.preferred_language === "English" || profile?.preferred_language === "en"
+            ? "en-IN"
+            : "hi-IN";
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.maxAlternatives = 1;
+
+        let finalText = "";
+        recognition.onstart = () => {
+          setIsRecording(true);
+          setVoiceSeconds(0);
+          setVoiceTranscript("");
+          setVoiceBlob(null);
+          setMessage("🎙️ Boliye... JUGAAD sun raha hai 😎");
+          voiceTimerRef.current = window.setInterval(() =>
+            setVoiceSeconds((value) => value + 1),
+            1000
+          );
+        };
+
+        recognition.onresult = (event: any) => {
+          let interim = "";
+          for (let i = event.resultIndex; i < event.results.length; i += 1) {
+            const text = String(event.results[i][0]?.transcript || "").trim();
+            if (event.results[i].isFinal) finalText += `${text} `;
+            else interim += `${text} `;
+          }
+          const combined = `${finalText} ${interim}`.trim();
+          setVoiceTranscript(combined);
+          setNeed(combined);
+        };
+
+        recognition.onerror = (event: any) => {
+          console.error("Speech recognition error", event);
+          if (voiceTimerRef.current) window.clearInterval(voiceTimerRef.current);
+          setIsRecording(false);
+          speechRecognitionRef.current = null;
+          const code = String(event?.error || "");
+          if (code === "not-allowed" || code === "service-not-allowed") {
+            setMessage("🎙️ Mic permission blocked hai. Browser settings me Microphone Allow karo.");
+          } else if (code === "no-speech") {
+            setMessage("🎙️ Awaaz nahi mili. Mic ke paas se dobara bolo.");
+          } else {
+            setMessage("🎙️ Voice samajhne mein problem hui. Dobara Bolo try karo.");
+          }
+        };
+
+        recognition.onend = () => {
+          if (voiceTimerRef.current) window.clearInterval(voiceTimerRef.current);
+          setIsRecording(false);
+          speechRecognitionRef.current = null;
+          const spoken = finalText.trim();
+          if (spoken) {
+            setNeed(spoken);
+            setVoiceTranscript(spoken);
+            setMessage("🎙️ Baat samajh aa gayi. Ab 🧠 AI se JUGAAD dabao.");
+          } else {
+            setMessage("🎙️ Kuch sunai nahi diya. Dobara Bolo try karo.");
+          }
+        };
+
+        speechRecognitionRef.current = recognition;
+        recognition.start();
+        return;
+      } catch (error) {
+        console.error("Speech recognition start failed", error);
+      }
+    }
+
+    // Fallback for browsers without speech recognition.
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      setMessage("🎙️ Is browser mein voice recording supported nahi hai.");
+      setMessage("🎙️ Is browser mein voice supported nahi hai. Chrome Android mein try karo.");
       return;
     }
     try {
@@ -758,30 +843,38 @@ export default function App() {
         setVoiceBlob(blob);
         stream.getTracks().forEach((track) => track.stop());
         if (voiceTimerRef.current) window.clearInterval(voiceTimerRef.current);
+        setMessage("🎙️ Voice ready hai — ab 🧠 AI se JUGAAD dabao.");
       };
       recorder.start(250);
       mediaRecorderRef.current = recorder;
       setVoiceSeconds(0);
       setIsRecording(true);
+      setMessage("🎙️ Boliye... JUGAAD record kar raha hai 😎");
       voiceTimerRef.current = window.setInterval(() => setVoiceSeconds((value) => value + 1), 1000);
 
-      // Voice ko intentionally 30 seconds tak rakho so mobile/Vercel request size safe rahe.
       window.setTimeout(() => {
         if (mediaRecorderRef.current === recorder && recorder.state === "recording") {
           recorder.stop();
           mediaRecorderRef.current = null;
           setIsRecording(false);
-          setMessage("🎙️ 30 sec ho gaye — voice ready hai, ab JUGAAD Karo.");
         }
       }, 30000);
     } catch (error) {
+      console.error("Mic error", error);
       setMessage("🎙️ Mic permission do, phir dobara try karo.");
     }
   };
 
   const stopVoiceRecording = () => {
-    mediaRecorderRef.current?.stop();
-    mediaRecorderRef.current = null;
+    if (speechRecognitionRef.current) {
+      try { speechRecognitionRef.current.stop(); } catch {}
+      speechRecognitionRef.current = null;
+    }
+    if (mediaRecorderRef.current) {
+      try { mediaRecorderRef.current.stop(); } catch {}
+      mediaRecorderRef.current = null;
+    }
+    if (voiceTimerRef.current) window.clearInterval(voiceTimerRef.current);
     setIsRecording(false);
   };
 
@@ -4882,7 +4975,7 @@ export default function App() {
 
                   <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
                     <button type="button" className="primary-small-btn" onClick={isRecording ? stopVoiceRecording : startVoiceRecording}>
-                      {isRecording ? `⏹️ Stop ${voiceSeconds}s` : voiceBlob ? "🎙️ Voice Ready" : "🎙️ Bolo"}
+                      {isRecording ? `⏹️ Stop ${voiceSeconds}s` : voiceTranscript || voiceBlob ? "🎙️ Voice Ready" : "🎙️ Bolo"}
                     </button>
                     <label className="primary-small-btn" style={{ cursor: "pointer" }}>
                       📸 Photo
@@ -4893,10 +4986,10 @@ export default function App() {
                     </button>
                   </div>
 
-                  {(aiPhotoPreview || voiceBlob) && (
+                  {(aiPhotoPreview || voiceBlob || voiceTranscript) && (
                     <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                       {aiPhotoPreview && <img src={aiPhotoPreview} alt="JUGAAD problem" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 12 }} />}
-                      {voiceBlob && <span style={{ padding: "8px 12px", borderRadius: 999, background: "#fff", color: "#111" }}>🎙️ Voice note ready</span>}
+                      {(voiceBlob || voiceTranscript) && <span style={{ padding: "8px 12px", borderRadius: 999, background: "#fff", color: "#111" }}>🎙️ Voice ready: {voiceTranscript ? voiceTranscript.slice(0, 80) : "audio"}</span>}
                     </div>
                   )}
 
