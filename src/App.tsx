@@ -92,7 +92,6 @@ type AiNeedResult = {
   confidence: number;
   safety_note?: string;
   next_step?: string;
-  solution?: string;
 };
 
 type ProviderMatch = {
@@ -199,11 +198,11 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [voiceSeconds, setVoiceSeconds] = useState(0);
   const [voiceBlob, setVoiceBlob] = useState<Blob | null>(null);
-  const [voiceTranscript, setVoiceTranscript] = useState("");
   const [matchedProviders, setMatchedProviders] = useState<ProviderMatch[]>([]);
   const [matchingRequestId, setMatchingRequestId] = useState("");
+  const [matchingStartedAt, setMatchingStartedAt] = useState<number | null>(null);
+  const [matchingSecondsLeft, setMatchingSecondsLeft] = useState(180);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const speechRecognitionRef = useRef<any>(null);
   const voiceChunksRef = useRef<Blob[]>([]);
   const voiceTimerRef = useRef<number | null>(null);
 
@@ -556,6 +555,26 @@ export default function App() {
 
   /* ---------------- CUSTOMER / PROVIDER ---------------- */
 
+  useEffect(() => {
+    if (!matchingStartedAt) return;
+
+    const updateTimer = () => {
+      const elapsed = Math.floor((Date.now() - matchingStartedAt) / 1000);
+      const remaining = Math.max(0, 180 - elapsed);
+      setMatchingSecondsLeft(remaining);
+
+      if (remaining <= 0) {
+        setMatchingRequestId("");
+        setMatchingStartedAt(null);
+        setMessage("⏱️ 3 minute ho gaye. Abhi provider match nahi mila. Request pending hai — thodi der baad dobara JUGAAD try kar sakte ho.");
+      }
+    };
+
+    updateTimer();
+    const timer = window.setInterval(updateTimer, 1000);
+    return () => window.clearInterval(timer);
+  }, [matchingStartedAt]);
+
   const createRequestFromValues = async (requestNeed: string, requestCategory: string, requestLocation: string) => {
     if (!user || isProvider || isAdmin) return null;
 
@@ -580,77 +599,64 @@ export default function App() {
     }
 
     const request = data as RequestRow;
+
+    // Request save hote hi customer ko matching screen/status dikhao.
+    // Provider matching background mein chalega; customer ko 3 minute se zyada block nahi karna.
     setMatchingRequestId(request.id);
+    setMatchingStartedAt(Date.now());
+    setMatchingSecondsLeft(180);
+    setMatchedProviders([]);
+    setTab("requests");
+    setMessage("🛠️ JUGAAD lag raha hai… sahi provider dhoondh rahe hain. Maximum 3 minute.");
 
-    try {
-      const matchResponse = await fetch("/api/match-provider", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${(await supabase.auth.getSession()).data.session?.access_token || ""}`,
-        },
-        body: JSON.stringify({
-          requestId: request.id,
-          need: cleanNeed,
-          category: requestCategory,
-          service: aiResult?.suggested_service || "",
-          location: requestLocation.trim() || profile?.preferred_address || "",
-        }),
-      });
+    // Provider matching ko UI ko block kiye bina background mein chalao.
+    void (async () => {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 170000);
 
-      const matchRaw = await matchResponse.text();
-      let matchJson: any = null;
       try {
-        matchJson = matchRaw ? JSON.parse(matchRaw) : null;
-      } catch {
-        console.warn("Provider matching returned non-JSON response", matchResponse.status, matchRaw.slice(0, 180));
+        const session = await supabase.auth.getSession();
+        const matchResponse = await fetch("/api/match-provider", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.data.session?.access_token || ""}`,
+          },
+          signal: controller.signal,
+          body: JSON.stringify({
+            requestId: request.id,
+            need: cleanNeed,
+            category: requestCategory,
+            service: aiResult?.suggested_service || "",
+            location: requestLocation.trim() || profile?.preferred_address || "",
+          }),
+        });
+
+        const matchRaw = await matchResponse.text();
+        let matchJson: any = null;
+        try {
+          matchJson = matchRaw ? JSON.parse(matchRaw) : null;
+        } catch {
+          console.warn("Provider matching returned non-JSON response", matchResponse.status, matchRaw.slice(0, 180));
+        }
+
+        if (matchResponse.ok && Array.isArray(matchJson?.providers) && matchJson.providers.length > 0) {
+          setMatchedProviders((matchJson.providers || []).map((p: any) => ({ ...p, full_name: p.full_name || p.name })) as ProviderMatch[]);
+          setMatchingRequestId("");
+          setMatchingStartedAt(null);
+          setMessage("🎉 JUGAAD lag gaya! Provider ko kaam mil gaya. 😎");
+          await loadRequests();
+        } else if (!matchResponse.ok && matchJson?.error) {
+          console.warn("Provider matching:", matchJson.error);
+        }
+      } catch (matchError) {
+        console.error("provider matching:", matchError);
+      } finally {
+        window.clearTimeout(timeoutId);
       }
-      if (matchResponse.ok && Array.isArray(matchJson?.providers)) {
-        setMatchedProviders((matchJson.providers || []).map((p: any) => ({ ...p, full_name: p.full_name || p.name })) as ProviderMatch[]);
-      } else if (!matchResponse.ok && matchJson?.error) {
-        console.warn("Provider matching:", matchJson.error);
-      }
-    } catch (matchError) {
-      console.error("provider matching:", matchError);
-    } finally {
-      setMatchingRequestId("");
-    }
+    })();
 
     return request;
-  };
-
-  const fileToCompressedImageDataUrl = async (file: File) => {
-    const original = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || ""));
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-
-    // Keep the request comfortably below Vercel serverless body limits.
-    // The original photo is still kept in the UI state; only the AI upload is compressed.
-    if (!original.startsWith("data:image/")) return original;
-
-    try {
-      const img = new Image();
-      img.src = original;
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = reject;
-      });
-
-      const maxSide = 1280;
-      const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
-      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return original;
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      return canvas.toDataURL("image/jpeg", 0.78);
-    } catch {
-      return original;
-    }
   };
 
   const analyzeJugaadNeed = async () => {
@@ -669,7 +675,12 @@ export default function App() {
     setMatchedProviders([]);
 
     try {
-      const imageBase64 = aiPhoto ? await fileToCompressedImageDataUrl(aiPhoto) : "";
+      const imageBase64 = aiPhoto ? await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = reject;
+        reader.readAsDataURL(aiPhoto);
+      }) : "";
       const audioBase64 = voiceBlob ? await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result || ""));
@@ -734,106 +745,13 @@ export default function App() {
   };
 
   const startVoiceRecording = async () => {
-    if (isRecording) return;
-
-    // Mobile Chrome/Android: use built-in speech recognition first.
-    // This puts the user's spoken words directly into the JUGAAD request,
-    // so voice does not depend on uploading an audio file to the server.
-    const SpeechRecognition =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition;
-
-    if (SpeechRecognition) {
-      try {
-        const recognition = new SpeechRecognition();
-        recognition.lang =
-          profile?.preferred_language === "English" || profile?.preferred_language === "en"
-            ? "en-IN"
-            : "hi-IN";
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.maxAlternatives = 1;
-
-        let finalText = "";
-        recognition.onstart = () => {
-          setIsRecording(true);
-          setVoiceSeconds(0);
-          setVoiceTranscript("");
-          setVoiceBlob(null);
-          setMessage("🎙️ Boliye... JUGAAD sun raha hai 😎");
-          voiceTimerRef.current = window.setInterval(() =>
-            setVoiceSeconds((value) => value + 1),
-            1000
-          );
-        };
-
-        recognition.onresult = (event: any) => {
-          let interim = "";
-          for (let i = event.resultIndex; i < event.results.length; i += 1) {
-            const text = String(event.results[i][0]?.transcript || "").trim();
-            if (event.results[i].isFinal) finalText += `${text} `;
-            else interim += `${text} `;
-          }
-          const combined = `${finalText} ${interim}`.trim();
-          setVoiceTranscript(combined);
-          setNeed(combined);
-        };
-
-        recognition.onerror = (event: any) => {
-          console.error("Speech recognition error", event);
-          if (voiceTimerRef.current) window.clearInterval(voiceTimerRef.current);
-          setIsRecording(false);
-          speechRecognitionRef.current = null;
-          const code = String(event?.error || "");
-          if (code === "not-allowed" || code === "service-not-allowed") {
-            setMessage("🎙️ Mic permission blocked hai. Browser settings me Microphone Allow karo.");
-          } else if (code === "no-speech") {
-            setMessage("🎙️ Awaaz nahi mili. Mic ke paas se dobara bolo.");
-          } else {
-            setMessage("🎙️ Voice samajhne mein problem hui. Dobara Bolo try karo.");
-          }
-        };
-
-        recognition.onend = () => {
-          if (voiceTimerRef.current) window.clearInterval(voiceTimerRef.current);
-          setIsRecording(false);
-          speechRecognitionRef.current = null;
-          const spoken = finalText.trim();
-          if (spoken) {
-            setNeed(spoken);
-            setVoiceTranscript(spoken);
-            setMessage("🎙️ Baat samajh aa gayi. Ab 🧠 AI se JUGAAD dabao.");
-          } else {
-            setMessage("🎙️ Kuch sunai nahi diya. Dobara Bolo try karo.");
-          }
-        };
-
-        speechRecognitionRef.current = recognition;
-        recognition.start();
-        return;
-      } catch (error) {
-        console.error("Speech recognition start failed", error);
-      }
-    }
-
-    // Fallback for browsers without speech recognition.
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      setMessage("🎙️ Is browser mein voice supported nahi hai. Chrome Android mein try karo.");
+      setMessage("🎙️ Is browser mein voice recording supported nahi hai.");
       return;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const preferredMimeTypes = [
-        "audio/webm;codecs=opus",
-        "audio/mp4",
-        "audio/ogg;codecs=opus",
-      ];
-      const supportedMime = preferredMimeTypes.find((type) =>
-        MediaRecorder.isTypeSupported(type)
-      );
-      const recorder = supportedMime
-        ? new MediaRecorder(stream, { mimeType: supportedMime })
-        : new MediaRecorder(stream);
+      const recorder = new MediaRecorder(stream);
       voiceChunksRef.current = [];
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) voiceChunksRef.current.push(event.data);
@@ -843,54 +761,27 @@ export default function App() {
         setVoiceBlob(blob);
         stream.getTracks().forEach((track) => track.stop());
         if (voiceTimerRef.current) window.clearInterval(voiceTimerRef.current);
-        setMessage("🎙️ Voice ready hai — ab 🧠 AI se JUGAAD dabao.");
       };
-      recorder.start(250);
+      recorder.start();
       mediaRecorderRef.current = recorder;
       setVoiceSeconds(0);
       setIsRecording(true);
-      setMessage("🎙️ Boliye... JUGAAD record kar raha hai 😎");
       voiceTimerRef.current = window.setInterval(() => setVoiceSeconds((value) => value + 1), 1000);
-
-      window.setTimeout(() => {
-        if (mediaRecorderRef.current === recorder && recorder.state === "recording") {
-          recorder.stop();
-          mediaRecorderRef.current = null;
-          setIsRecording(false);
-        }
-      }, 30000);
     } catch (error) {
-      console.error("Mic error", error);
       setMessage("🎙️ Mic permission do, phir dobara try karo.");
     }
   };
 
   const stopVoiceRecording = () => {
-    if (speechRecognitionRef.current) {
-      try { speechRecognitionRef.current.stop(); } catch {}
-      speechRecognitionRef.current = null;
-    }
-    if (mediaRecorderRef.current) {
-      try { mediaRecorderRef.current.stop(); } catch {}
-      mediaRecorderRef.current = null;
-    }
-    if (voiceTimerRef.current) window.clearInterval(voiceTimerRef.current);
+    mediaRecorderRef.current?.stop();
+    mediaRecorderRef.current = null;
     setIsRecording(false);
   };
 
   const handleAiPhoto = (file: File | null) => {
     if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      setMessage("📸 Sirf image/photo upload karo.");
-      return;
-    }
-    if (file.size > 15 * 1024 * 1024) {
-      setMessage("📸 Photo bahut badi hai. 15 MB se chhoti photo upload karo.");
-      return;
-    }
     setAiPhoto(file);
     setAiPhotoPreview(URL.createObjectURL(file));
-    setMessage("📸 Photo mil gayi. Ab JUGAAD AI dabao — photo ko samajhkar solution aur service dono nikalega.");
   };
 
   const createRequest = async () => {
@@ -913,9 +804,7 @@ export default function App() {
       if (!created) return;
       setNeed("");
       setLocation("");
-      setMessage("🎉 JUGAAD lag gaya! Provider dhoondh rahe hain.");
       await loadRequests();
-      setTab("requests");
     } finally {
       setSavingRequest(false);
     }
@@ -4975,7 +4864,7 @@ export default function App() {
 
                   <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
                     <button type="button" className="primary-small-btn" onClick={isRecording ? stopVoiceRecording : startVoiceRecording}>
-                      {isRecording ? `⏹️ Stop ${voiceSeconds}s` : voiceTranscript || voiceBlob ? "🎙️ Voice Ready" : "🎙️ Bolo"}
+                      {isRecording ? `⏹️ Stop ${voiceSeconds}s` : voiceBlob ? "🎙️ Voice Ready" : "🎙️ Bolo"}
                     </button>
                     <label className="primary-small-btn" style={{ cursor: "pointer" }}>
                       📸 Photo
@@ -4986,10 +4875,10 @@ export default function App() {
                     </button>
                   </div>
 
-                  {(aiPhotoPreview || voiceBlob || voiceTranscript) && (
+                  {(aiPhotoPreview || voiceBlob) && (
                     <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                       {aiPhotoPreview && <img src={aiPhotoPreview} alt="JUGAAD problem" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 12 }} />}
-                      {(voiceBlob || voiceTranscript) && <span style={{ padding: "8px 12px", borderRadius: 999, background: "#fff", color: "#111" }}>🎙️ Voice ready: {voiceTranscript ? voiceTranscript.slice(0, 80) : "audio"}</span>}
+                      {voiceBlob && <span style={{ padding: "8px 12px", borderRadius: 999, background: "#fff", color: "#111" }}>🎙️ Voice note ready</span>}
                     </div>
                   )}
 
@@ -4997,8 +4886,7 @@ export default function App() {
                     <div style={{ marginTop: 12, padding: 12, borderRadius: 14, background: "#fff", color: "#111" }}>
                       <strong>🧠 JUGAAD ne samjha:</strong> {aiResult.problem || aiResult.need}
                       <div style={{ marginTop: 5 }}>🛠️ Service: {aiResult.suggested_service || aiResult.category} • {Math.round((aiResult.confidence || 0) * 100)}% confidence</div>
-                      {aiResult.solution && <div style={{ marginTop: 8, fontWeight: 800 }}>💡 JUGAAD Solution: {aiResult.solution}</div>}
-                      {aiResult.next_step && <div style={{ marginTop: 5 }}>👉 Next step: {aiResult.next_step}</div>}
+                      {aiResult.next_step && <div style={{ marginTop: 5 }}>👉 {aiResult.next_step}</div>}
                       {aiResult.safety_note && <div style={{ marginTop: 5 }}>⚠️ {aiResult.safety_note}</div>}
                     </div>
                   )}
@@ -5290,6 +5178,28 @@ export default function App() {
                   <h1>Aapke saare JUGAAD</h1>
                   <p>Kaam kaha tak pahucha, yahin dikhega.</p>
                 </div>
+
+                {matchingRequestId && matchingStartedAt && (
+                  <div
+                    className="request-box"
+                    style={{
+                      marginBottom: 18,
+                      textAlign: "center",
+                      border: "2px solid #FFD600",
+                      background: "#fffdf0",
+                    }}
+                  >
+                    <div style={{ fontSize: 42 }}>🛵💨</div>
+                    <h2 style={{ margin: "6px 0" }}>JUGAAD lag raha hai…</h2>
+                    <p style={{ margin: "6px 0 12px" }}>
+                      Sahi provider dhoondh rahe hain. <strong>Maximum 3 minute</strong>.
+                    </p>
+                    <div style={{ fontSize: 24, fontWeight: 900 }}>
+                      {Math.floor(matchingSecondsLeft / 60)}:{String(matchingSecondsLeft % 60).padStart(2, "0")}
+                    </div>
+                    <small>Provider milte hi yahin JUGAAD mil gaya dikhega 😎</small>
+                  </div>
+                )}
 
                 <div className="customer-request-list">
                   {customerRequests.map((r) => {
