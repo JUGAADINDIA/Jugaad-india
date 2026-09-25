@@ -92,6 +92,7 @@ type AiNeedResult = {
   confidence: number;
   safety_note?: string;
   next_step?: string;
+  solution?: string;
 };
 
 type ProviderMatch = {
@@ -616,6 +617,40 @@ export default function App() {
     return request;
   };
 
+  const fileToCompressedImageDataUrl = async (file: File) => {
+    const original = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+    // Keep the request comfortably below Vercel serverless body limits.
+    // The original photo is still kept in the UI state; only the AI upload is compressed.
+    if (!original.startsWith("data:image/")) return original;
+
+    try {
+      const img = new Image();
+      img.src = original;
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = reject;
+      });
+
+      const maxSide = 1280;
+      const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return original;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL("image/jpeg", 0.78);
+    } catch {
+      return original;
+    }
+  };
+
   const analyzeJugaadNeed = async () => {
     if (!user || isProvider || isAdmin) {
       setMessage("🙋 AI JUGAAD Customer mode mein use karo.");
@@ -632,12 +667,7 @@ export default function App() {
     setMatchedProviders([]);
 
     try {
-      const imageBase64 = aiPhoto ? await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ""));
-        reader.onerror = reject;
-        reader.readAsDataURL(aiPhoto);
-      }) : "";
+      const imageBase64 = aiPhoto ? await fileToCompressedImageDataUrl(aiPhoto) : "";
       const audioBase64 = voiceBlob ? await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result || ""));
@@ -708,7 +738,17 @@ export default function App() {
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      const preferredMimeTypes = [
+        "audio/webm;codecs=opus",
+        "audio/mp4",
+        "audio/ogg;codecs=opus",
+      ];
+      const supportedMime = preferredMimeTypes.find((type) =>
+        MediaRecorder.isTypeSupported(type)
+      );
+      const recorder = supportedMime
+        ? new MediaRecorder(stream, { mimeType: supportedMime })
+        : new MediaRecorder(stream);
       voiceChunksRef.current = [];
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) voiceChunksRef.current.push(event.data);
@@ -719,11 +759,21 @@ export default function App() {
         stream.getTracks().forEach((track) => track.stop());
         if (voiceTimerRef.current) window.clearInterval(voiceTimerRef.current);
       };
-      recorder.start();
+      recorder.start(250);
       mediaRecorderRef.current = recorder;
       setVoiceSeconds(0);
       setIsRecording(true);
       voiceTimerRef.current = window.setInterval(() => setVoiceSeconds((value) => value + 1), 1000);
+
+      // Voice ko intentionally 30 seconds tak rakho so mobile/Vercel request size safe rahe.
+      window.setTimeout(() => {
+        if (mediaRecorderRef.current === recorder && recorder.state === "recording") {
+          recorder.stop();
+          mediaRecorderRef.current = null;
+          setIsRecording(false);
+          setMessage("🎙️ 30 sec ho gaye — voice ready hai, ab JUGAAD Karo.");
+        }
+      }, 30000);
     } catch (error) {
       setMessage("🎙️ Mic permission do, phir dobara try karo.");
     }
@@ -737,8 +787,17 @@ export default function App() {
 
   const handleAiPhoto = (file: File | null) => {
     if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setMessage("📸 Sirf image/photo upload karo.");
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      setMessage("📸 Photo bahut badi hai. 15 MB se chhoti photo upload karo.");
+      return;
+    }
     setAiPhoto(file);
     setAiPhotoPreview(URL.createObjectURL(file));
+    setMessage("📸 Photo mil gayi. Ab JUGAAD AI dabao — photo ko samajhkar solution aur service dono nikalega.");
   };
 
   const createRequest = async () => {
@@ -4845,7 +4904,8 @@ export default function App() {
                     <div style={{ marginTop: 12, padding: 12, borderRadius: 14, background: "#fff", color: "#111" }}>
                       <strong>🧠 JUGAAD ne samjha:</strong> {aiResult.problem || aiResult.need}
                       <div style={{ marginTop: 5 }}>🛠️ Service: {aiResult.suggested_service || aiResult.category} • {Math.round((aiResult.confidence || 0) * 100)}% confidence</div>
-                      {aiResult.next_step && <div style={{ marginTop: 5 }}>👉 {aiResult.next_step}</div>}
+                      {aiResult.solution && <div style={{ marginTop: 8, fontWeight: 800 }}>💡 JUGAAD Solution: {aiResult.solution}</div>}
+                      {aiResult.next_step && <div style={{ marginTop: 5 }}>👉 Next step: {aiResult.next_step}</div>}
                       {aiResult.safety_note && <div style={{ marginTop: 5 }}>⚠️ {aiResult.safety_note}</div>}
                     </div>
                   )}
