@@ -1862,7 +1862,7 @@ export default function App() {
           💡😎
         </div>
 
-        <h2>JUGAAD</h2>
+        <h2>😎💡 JUGAAD INDIA 🇮🇳</h2>
 
         <p>
           Jugaad machine garam ho rahi hai...
@@ -1891,8 +1891,8 @@ export default function App() {
       <div className="auth-screen">
         <div className="auth-card">
           <div className="brand-big">💡😎</div>
-          <h1>JUGAAD</h1>
-          <p>Har zarurat ka jugaad 🇮🇳</p>
+          <h1>😎💡 JUGAAD INDIA 🇮🇳</h1>
+          <p>Kaam tumhara, JUGAAD hamara!<br />Jahan kaam atke, wahan JUGAAD khatke! 😂🔧</p>
 
           <div style={{ display: "grid", gap: 12, marginTop: 24 }}>
             <button
@@ -1926,7 +1926,7 @@ export default function App() {
     return (
       <div className="app-loading">
         <div className="loading-logo">💡😎</div>
-        <h2>JUGAAD</h2>
+        <h2>😎💡 JUGAAD INDIA 🇮🇳</h2>
         <p>Role check ho raha hai... 🔐</p>
       </div>
     );
@@ -1948,7 +1948,7 @@ export default function App() {
             </div>
 
             <div>
-              <strong>JUGAAD</strong>
+              <strong>😎💡 JUGAAD INDIA 🇮🇳</strong>
               <span>
                 CONTROL ROOM
               </span>
@@ -4711,16 +4711,16 @@ export default function App() {
         <div className="brand">
 
           <div className="brand-logo">
-            
+            💡😎
           </div>
 
           <div>
             <strong>
-              JUGAAD
+              JUGAAD INDIA 🇮🇳
             </strong>
 
             <small>
-              Kaam tumhara, JUGAAD hamara!<br /> Jahan kaam atke, wahan JUGAAD khatke! 😂🔧
+              Kaam tumhara, JUGAAD hamara!<br />Jahan kaam atke, wahan JUGAAD khatke! 😂🔧
             </small>
           </div>
         </div>
@@ -4838,44 +4838,44 @@ export default function App() {
         {tab === "home" && (
           <>
 
-            <section className="hero">
 
-              <div>
 
-                <span className="hero-badge">
-                  {isProvider ? "🧰 JUGAAD Provider Network" : "🇮🇳 Desi Help Network"}
-                </span>
 
-                <h1>
-                  {isProvider ? (
-                    <>
-                      Kaam chahiye?
-                      <br />
-                      <span>JUGAAD par milega.</span>
-                    </>
-                  ) : (
-                    <>
-                      Jo chahiye,
-                      <br />
-                      <span>JUGAAD se milega.</span>
-                    </>
-                  )}
-                </h1>
 
-                <p>
-                  Koi bhi genuine kaam ho —
-                  JUGAAD ko batao. Baaki hum
-                  jugaad lagayenge 😎
-                </p>
-              </div>
 
-              <div className="hero-mascot">
-                
-                <span>
-                  
-                </span>
-              </div>
-            </section>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
             {isProvider ? (
               <section className="request-box provider-box">
