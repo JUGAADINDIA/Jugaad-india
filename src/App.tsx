@@ -595,9 +595,17 @@ export default function App() {
         }),
       });
 
-      const matchJson = await matchResponse.json();
-      if (matchResponse.ok && Array.isArray(matchJson.providers)) {
+      const matchRaw = await matchResponse.text();
+      let matchJson: any = null;
+      try {
+        matchJson = matchRaw ? JSON.parse(matchRaw) : null;
+      } catch {
+        console.warn("Provider matching returned non-JSON response", matchResponse.status, matchRaw.slice(0, 180));
+      }
+      if (matchResponse.ok && Array.isArray(matchJson?.providers)) {
         setMatchedProviders((matchJson.providers || []).map((p: any) => ({ ...p, full_name: p.full_name || p.name })) as ProviderMatch[]);
+      } else if (!matchResponse.ok && matchJson?.error) {
+        console.warn("Provider matching:", matchJson.error);
       }
     } catch (matchError) {
       console.error("provider matching:", matchError);
@@ -647,8 +655,20 @@ export default function App() {
         }),
       });
 
-      const json = await response.json();
-      if (!response.ok) throw new Error(json.error || "AI analysis failed");
+      const rawResponse = await response.text();
+      let json: any = null;
+      try {
+        json = rawResponse ? JSON.parse(rawResponse) : null;
+      } catch {
+        const preview = rawResponse.replace(/\s+/g, " ").slice(0, 180);
+        throw new Error(
+          response.status === 404
+            ? "AI API route nahi mili. Vercel project mein /api/analyze-need.ts file deploy karo."
+            : `AI API ne JSON ke badle response diya (${response.status}): ${preview}`
+        );
+      }
+      if (!response.ok) throw new Error(json?.error || "AI analysis failed");
+      if (!json?.result) throw new Error("AI result nahi mila.");
 
       const result = json.result as AiNeedResult;
       setAiResult(result);
