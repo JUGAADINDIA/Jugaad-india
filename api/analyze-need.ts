@@ -60,6 +60,11 @@ export default async function handler(req: any, res: any) {
     const imageDataUrl = String(body.imageDataUrl || "");
     const audioDataUrl = String(body.audioDataUrl || "");
 
+    // Protect the Vercel function from oversized base64 payloads.
+    if (imageDataUrl.length > 3_500_000) {
+      return sendJson(res, 413, { error: "Photo AI ke liye bahut badi hai. Photo dobara upload karo; app use automatically compress karegi." });
+    }
+
     let transcript = "";
     if (audioDataUrl) transcript = await transcribeAudio(audioDataUrl);
 
@@ -72,10 +77,11 @@ export default async function handler(req: any, res: any) {
 Understand Hindi, Hinglish, English and regional-language speech. A user may describe a problem or show a photo.
 Identify the likely service/help needed. Do not claim a dangerous medical, electrical, gas or structural diagnosis.
 Return ONLY valid JSON with exactly these keys:
-need, problem, category, suggested_service, confidence, safety_note, next_step.
+need, problem, category, suggested_service, confidence, safety_note, next_step, solution.
 category must be one of: Home, Repair, Delivery, Personal, Business, Sab.
 confidence must be a number from 0 to 1.
 If uncertain, lower confidence. Do not invent details.
+The solution must be a practical, safe JUGAAD action or the appropriate professional service to contact. For a photo, use only what is visibly supported by the image; do not pretend to know hidden internal faults.
 
 User text/transcript:
 ${combined || "(none)"}`;
@@ -104,7 +110,17 @@ ${combined || "(none)"}`;
     }
 
     const outputText = String(data?.output_text || "").trim();
+    if (!outputText) {
+      throw new Error("AI ne empty response diya. OPENAI_MODEL/API configuration check karo.");
+    }
     const result = extractJson(outputText);
+    result.need = String(result.need || combined || "").trim();
+    result.problem = String(result.problem || result.need || "").trim();
+    result.category = ["Home", "Repair", "Delivery", "Personal", "Business", "Sab"].includes(String(result.category))
+      ? String(result.category)
+      : "Sab";
+    result.suggested_service = String(result.suggested_service || "General JUGAAD").trim();
+    result.solution = String(result.solution || result.next_step || "Appropriate service/provider se JUGAAD karvao.").trim();
     result.confidence = Math.max(0, Math.min(1, Number(result.confidence) || 0));
 
     return sendJson(res, 200, { result, transcript });
@@ -115,4 +131,3 @@ ${combined || "(none)"}`;
     });
   }
 }
-
