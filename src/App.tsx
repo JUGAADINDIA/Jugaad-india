@@ -1862,7 +1862,7 @@ export default function App() {
           💡😎
         </div>
 
-        <h2>JUGAAD</h2>
+        <h2>😎💡 JUGAAD INDIA 🇮🇳</h2>
 
         <p>
           Jugaad machine garam ho rahi hai...
@@ -1891,8 +1891,8 @@ export default function App() {
       <div className="auth-screen">
         <div className="auth-card">
           <div className="brand-big">💡😎</div>
-          <h1>JUGAAD</h1>
-          <p>Har zarurat ka jugaad 🇮🇳</p>
+          <h1>😎💡 JUGAAD INDIA 🇮🇳</h1>
+          <p>Kaam tumhara, JUGAAD hamara!<br />Jahan kaam atke, wahan JUGAAD khatke! 😂🔧</p>
 
           <div style={{ display: "grid", gap: 12, marginTop: 24 }}>
             <button
@@ -1926,7 +1926,7 @@ export default function App() {
     return (
       <div className="app-loading">
         <div className="loading-logo">💡😎</div>
-        <h2>JUGAAD</h2>
+        <h2>😎💡 JUGAAD INDIA 🇮🇳</h2>
         <p>Role check ho raha hai... 🔐</p>
       </div>
     );
@@ -1948,7 +1948,7 @@ export default function App() {
             </div>
 
             <div>
-              <strong>JUGAAD</strong>
+              <strong>😎💡 JUGAAD INDIA 🇮🇳</strong>
               <span>
                 CONTROL ROOM
               </span>
@@ -4716,11 +4716,11 @@ export default function App() {
 
           <div>
             <strong>
-              JUGAAD
+              😎💡 JUGAAD INDIA 🇮🇳
             </strong>
 
             <small>
-              Har zarurat ka jugaad 🇮🇳
+              Kaam tumhara, JUGAAD hamara!<br />Jahan kaam atke, wahan JUGAAD khatke! 😂🔧
             </small>
           </div>
         </div>
