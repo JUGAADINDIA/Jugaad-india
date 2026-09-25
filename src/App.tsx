@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient, User } from "@supabase/supabase-js";
 import "./App.css";
 
@@ -82,6 +82,25 @@ type PaymentRow = {
   created_at?: string | null;
   paid_at?: string | null;
   updated_at?: string | null;
+};
+
+type AiNeedResult = {
+  need: string;
+  problem: string;
+  category: string;
+  suggested_service: string;
+  confidence: number;
+  safety_note?: string;
+  next_step?: string;
+};
+
+type ProviderMatch = {
+  id: string;
+  full_name: string | null;
+  phone: string | null;
+  service_area: string | null;
+  rating: number | null;
+  distance_km?: number | null;
 };
 
 const STATUS = {
@@ -172,6 +191,18 @@ export default function App() {
   const [need, setNeed] = useState("");
   const [location, setLocation] = useState("");
   const [savingRequest, setSavingRequest] = useState(false);
+  const [aiAnalyzing, setAiAnalyzing] = useState(false);
+  const [aiResult, setAiResult] = useState<AiNeedResult | null>(null);
+  const [aiPhoto, setAiPhoto] = useState<File | null>(null);
+  const [aiPhotoPreview, setAiPhotoPreview] = useState("");
+  const [isRecording, setIsRecording] = useState(false);
+  const [voiceSeconds, setVoiceSeconds] = useState(0);
+  const [voiceBlob, setVoiceBlob] = useState<Blob | null>(null);
+  const [matchedProviders, setMatchedProviders] = useState<ProviderMatch[]>([]);
+  const [matchingRequestId, setMatchingRequestId] = useState("");
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const voiceChunksRef = useRef<Blob[]>([]);
+  const voiceTimerRef = useRef<number | null>(null);
 
   const [requests, setRequests] = useState<RequestRow[]>([]);
   const [matches, setMatches] = useState<MatchRow[]>([]);
@@ -522,60 +553,200 @@ export default function App() {
 
   /* ---------------- CUSTOMER / PROVIDER ---------------- */
 
+  const createRequestFromValues = async (requestNeed: string, requestCategory: string, requestLocation: string) => {
+    if (!user || isProvider || isAdmin) return null;
+
+    const cleanNeed = requestNeed.trim();
+    if (!cleanNeed) return null;
+
+    const { data, error } = await supabase
+      .from("requests")
+      .insert({
+        user_id: user.id,
+        need: cleanNeed,
+        category: requestCategory === "Sab" ? null : requestCategory,
+        location: requestLocation.trim() || profile?.preferred_address || null,
+        status: STATUS.pending,
+      })
+      .select("*")
+      .single();
+
+    if (error) {
+      setMessage(`❌ Request save nahi hui: ${error.message}`);
+      return null;
+    }
+
+    const request = data as RequestRow;
+    setMatchingRequestId(request.id);
+
+    try {
+      const matchResponse = await fetch("/api/match-provider", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${(await supabase.auth.getSession()).data.session?.access_token || ""}`,
+        },
+        body: JSON.stringify({
+          requestId: request.id,
+          need: cleanNeed,
+          category: requestCategory,
+          service: aiResult?.suggested_service || "",
+          location: requestLocation.trim() || profile?.preferred_address || "",
+        }),
+      });
+
+      const matchJson = await matchResponse.json();
+      if (matchResponse.ok && Array.isArray(matchJson.providers)) {
+        setMatchedProviders((matchJson.providers || []).map((p: any) => ({ ...p, full_name: p.full_name || p.name })) as ProviderMatch[]);
+      }
+    } catch (matchError) {
+      console.error("provider matching:", matchError);
+    } finally {
+      setMatchingRequestId("");
+    }
+
+    return request;
+  };
+
+  const analyzeJugaadNeed = async () => {
+    if (!user || isProvider || isAdmin) {
+      setMessage("🙋 AI JUGAAD Customer mode mein use karo.");
+      return;
+    }
+
+    if (!need.trim() && !aiPhoto && !voiceBlob) {
+      setMessage("🎙️ Bolo, 📸 photo bhejo ya ✍️ kuch likho.");
+      return;
+    }
+
+    setAiAnalyzing(true);
+    setAiResult(null);
+    setMatchedProviders([]);
+
+    try {
+      const imageBase64 = aiPhoto ? await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = reject;
+        reader.readAsDataURL(aiPhoto);
+      }) : "";
+      const audioBase64 = voiceBlob ? await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = reject;
+        reader.readAsDataURL(voiceBlob);
+      }) : "";
+
+      const response = await fetch("/api/analyze-need", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: need.trim(),
+          imageDataUrl: imageBase64,
+          audioDataUrl: audioBase64,
+        }),
+      });
+
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.error || "AI analysis failed");
+
+      const result = json.result as AiNeedResult;
+      setAiResult(result);
+      setNeed(result.need || need);
+      setCategory(result.category || "Sab");
+
+      const locationValue = location.trim() || profile?.preferred_address || "";
+      const autoRequest = Number(result.confidence || 0) >= 0.65;
+
+      if (autoRequest) {
+        const created = await createRequestFromValues(result.need || need, result.category || "Sab", locationValue);
+        if (created) {
+          setNeed("");
+          setLocation("");
+          setAiPhoto(null);
+          setVoiceBlob(null);
+          setAiPhotoPreview("");
+          setTab("requests");
+          setMessage(`🧠 Samajh gaya: ${result.suggested_service || result.category}. Request automatically bhej di — ab provider dhoondh rahe hain. 😎`);
+          await loadRequests();
+        }
+      } else {
+        setMessage("🧠 JUGAAD ko idea mil gaya, par confidence kam hai. Neeche check karke JUGAAD Karo.");
+      }
+    } catch (error) {
+      console.error("AI JUGAAD:", error);
+      setMessage(`❌ AI samajh nahi paaya: ${error instanceof Error ? error.message : "Try again"}`);
+    } finally {
+      setAiAnalyzing(false);
+    }
+  };
+
+  const startVoiceRecording = async () => {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setMessage("🎙️ Is browser mein voice recording supported nahi hai.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      voiceChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) voiceChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(voiceChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        setVoiceBlob(blob);
+        stream.getTracks().forEach((track) => track.stop());
+        if (voiceTimerRef.current) window.clearInterval(voiceTimerRef.current);
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setVoiceSeconds(0);
+      setIsRecording(true);
+      voiceTimerRef.current = window.setInterval(() => setVoiceSeconds((value) => value + 1), 1000);
+    } catch (error) {
+      setMessage("🎙️ Mic permission do, phir dobara try karo.");
+    }
+  };
+
+  const stopVoiceRecording = () => {
+    mediaRecorderRef.current?.stop();
+    mediaRecorderRef.current = null;
+    setIsRecording(false);
+  };
+
+  const handleAiPhoto = (file: File | null) => {
+    if (!file) return;
+    setAiPhoto(file);
+    setAiPhotoPreview(URL.createObjectURL(file));
+  };
+
   const createRequest = async () => {
     if (!user) {
       setMessage("🔐 Pehle login karo.");
       return;
     }
-
     if (isProvider || isAdmin) {
       setMessage("🔐 Customer request sirf Customer account se banegi.");
       return;
     }
-
     const cleanNeed = need.trim();
-
     if (!cleanNeed) {
       setMessage("😎 Bhai, kaam to batao!");
       return;
     }
-
     setSavingRequest(true);
-
-    const { error } = await supabase
-      .from("requests")
-      .insert({
-        user_id: user.id,
-        need: cleanNeed,
-        category:
-          category === "Sab"
-            ? null
-            : category,
-        location:
-          location.trim() ||
-          profile?.preferred_address ||
-          null,
-        status: STATUS.pending,
-      });
-
-    setSavingRequest(false);
-
-    if (error) {
-      setMessage(
-        `❌ Request save nahi hui: ${error.message}`
-      );
-      return;
+    try {
+      const created = await createRequestFromValues(cleanNeed, category, location);
+      if (!created) return;
+      setNeed("");
+      setLocation("");
+      setMessage("🎉 JUGAAD lag gaya! Provider dhoondh rahe hain.");
+      await loadRequests();
+      setTab("requests");
+    } finally {
+      setSavingRequest(false);
     }
-
-    setNeed("");
-    setLocation("");
-
-    setMessage(
-      "🎉 JUGAAD lag gaya! Kaam dhoondh rahe hain."
-    );
-
-    await loadRequests();
-    setTab("requests");
   };
 
   const useService = (
@@ -720,13 +891,63 @@ export default function App() {
     );
   };
 
+  const switchToProvider = async () => {
+    if (!user) return;
+
+    const { error } =
+      await supabase
+        .from("profiles")
+        .upsert({
+          id: user.id,
+          role: "provider",
+          is_active: true,
+        });
+
+    if (error) {
+      setMessage(
+        `❌ Provider mode nahi laga: ${error.message}`
+      );
+      return;
+    }
+
+    await loadProfile(user.id);
+
+    setMessage(
+      "🧰 Provider mode ON! Ab kaam pakdo."
+    );
+  };
+
+  const switchToCustomer = async () => {
+    if (!user) return;
+
+    const { error } =
+      await supabase
+        .from("profiles")
+        .upsert({
+          id: user.id,
+          role: "customer",
+        });
+
+    if (error) {
+      setMessage(
+        `❌ Customer mode nahi laga: ${error.message}`
+      );
+      return;
+    }
+
+    await loadProfile(user.id);
+
+    setMessage(
+      "🙋 Customer mode ON!"
+    );
+  };
+
   const signOut = async () => {
     setProfile(null);
     setUser(null);
     setProfileLoading(false);
     setTab("home");
     setAdminSection("dashboard");
-    setMessage("");
     await supabase.auth.signOut();
   };
 
@@ -1725,14 +1946,6 @@ export default function App() {
                     {unreadCount}
                   </span>
                 )}
-              </button>
-
-              <button
-                className="logout-btn"
-                onClick={signOut}
-                title="Admin Logout"
-              >
-                🚪 Logout
               </button>
 
               <div className="admin-profile">
@@ -4512,6 +4725,45 @@ export default function App() {
                   rows={4}
                 />
 
+                <div className="ai-jugaad-panel" style={{ marginTop: 14, padding: 14, borderRadius: 18, background: "#111", color: "#fff" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <div>
+                      <strong style={{ fontSize: 18 }}>🧠 JUGAAD AI</strong>
+                      <div style={{ opacity: 0.8, marginTop: 3 }}>Bolo + photo bhejo — JUGAAD problem samjhega aur request khud banayega.</div>
+                    </div>
+                    <span style={{ fontSize: 12, opacity: 0.75 }}>Voice • Photo • Text</span>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                    <button type="button" className="primary-small-btn" onClick={isRecording ? stopVoiceRecording : startVoiceRecording}>
+                      {isRecording ? `⏹️ Stop ${voiceSeconds}s` : voiceBlob ? "🎙️ Voice Ready" : "🎙️ Bolo"}
+                    </button>
+                    <label className="primary-small-btn" style={{ cursor: "pointer" }}>
+                      📸 Photo
+                      <input type="file" accept="image/*" capture="environment" hidden onChange={(e) => handleAiPhoto(e.target.files?.[0] || null)} />
+                    </label>
+                    <button type="button" className="primary-small-btn" disabled={aiAnalyzing} onClick={analyzeJugaadNeed}>
+                      {aiAnalyzing ? "🧠 Samajh raha hai..." : "🧠 AI se JUGAAD"}
+                    </button>
+                  </div>
+
+                  {(aiPhotoPreview || voiceBlob) && (
+                    <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      {aiPhotoPreview && <img src={aiPhotoPreview} alt="JUGAAD problem" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 12 }} />}
+                      {voiceBlob && <span style={{ padding: "8px 12px", borderRadius: 999, background: "#fff", color: "#111" }}>🎙️ Voice note ready</span>}
+                    </div>
+                  )}
+
+                  {aiResult && (
+                    <div style={{ marginTop: 12, padding: 12, borderRadius: 14, background: "#fff", color: "#111" }}>
+                      <strong>🧠 JUGAAD ne samjha:</strong> {aiResult.problem || aiResult.need}
+                      <div style={{ marginTop: 5 }}>🛠️ Service: {aiResult.suggested_service || aiResult.category} • {Math.round((aiResult.confidence || 0) * 100)}% confidence</div>
+                      {aiResult.next_step && <div style={{ marginTop: 5 }}>👉 {aiResult.next_step}</div>}
+                      {aiResult.safety_note && <div style={{ marginTop: 5 }}>⚠️ {aiResult.safety_note}</div>}
+                    </div>
+                  )}
+                </div>
+
                 <div className="category-row">
 
                   {categories.map(
@@ -4626,6 +4878,20 @@ export default function App() {
                 )}
               </div>
             </section>
+
+            {matchedProviders.length > 0 && (
+              <section className="request-box" style={{ marginTop: 18 }}>
+                <div className="section-title"><div><span>🤝 PROVIDER MATCHING</span><h2>JUGAAD ko log mil gaye 😎</h2></div></div>
+                <div className="provider-job-list">
+                  {matchedProviders.map((provider) => (
+                    <div className="job-card" key={provider.id}>
+                      <div><strong>{provider.full_name || "JUGAAD Provider"}</strong><p>📍 {provider.service_area || "Nearby"}</p><small>⭐ {provider.rating ?? "New"}</small></div>
+                      <span className="status status-accepted">🔔 Notified</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
           </>
         )}
 
