@@ -1973,6 +1973,28 @@ export default function App() {
                 )}
               </button>
 
+              <button
+                type="button"
+                onClick={signOut}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "6px",
+                  padding: "10px 16px",
+                  border: "2px solid #111111",
+                  borderRadius: "12px",
+                  background: "#FFD600",
+                  color: "#111111",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  minWidth: "130px",
+                }}
+              >
+                🚪 Admin Logout
+              </button>
+
               <div className="admin-profile">
                 <div className="avatar">
                   👨‍💼
