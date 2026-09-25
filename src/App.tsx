@@ -1082,10 +1082,15 @@ export default function App() {
     userId: string,
     newRole: string
   ) => {
-    if (newRole === "admin") {
-      setMessage(
-        "🔐 Admin role yahan se change nahi kiya ja sakta."
-      );
+    // Admin is the central control role. It cannot be assigned from
+    // the normal user-management screen.
+    if (userId === user.id) {
+      setMessage("🔐 Apna admin/role yahan se change nahi kar sakte.");
+      return;
+    }
+
+    if (!["customer", "provider"].includes(newRole)) {
+      setMessage("🔐 Sirf Customer ya Provider role select karo.");
       return;
     }
 
@@ -2184,6 +2189,58 @@ export default function App() {
                   </div>
                 </div>
 
+                <section className="admin-panel" style={{ marginBottom: 18 }}>
+                  <div className="panel-heading">
+                    <div>
+                      <h2>🔗 JUGAAD Central Control</h2>
+                      <p>Admin ke neeche saare Customer aur Provider ek hi system se connected hain.</p>
+                    </div>
+                    <span className="role-chip">ADMIN CONTROL</span>
+                  </div>
+
+                  <div className="payment-summary">
+                    <button
+                      className="admin-quick-card"
+                      onClick={() => setAdminSection("users")}
+                      style={{ cursor: "pointer", textAlign: "left" }}
+                    >
+                      <span>👥</span>
+                      <strong>{adminStats.customers} Customers</strong>
+                      <small>Customer accounts manage karo</small>
+                    </button>
+
+                    <button
+                      className="admin-quick-card"
+                      onClick={() => setAdminSection("users")}
+                      style={{ cursor: "pointer", textAlign: "left" }}
+                    >
+                      <span>🧰</span>
+                      <strong>{adminStats.providers} Providers</strong>
+                      <small>Provider accounts manage karo</small>
+                    </button>
+
+                    <button
+                      className="admin-quick-card"
+                      onClick={() => setAdminSection("requests")}
+                      style={{ cursor: "pointer", textAlign: "left" }}
+                    >
+                      <span>📋</span>
+                      <strong>{adminStats.requests} Requests</strong>
+                      <small>User ki requirements control karo</small>
+                    </button>
+
+                    <button
+                      className="admin-quick-card"
+                      onClick={() => setAdminSection("matches")}
+                      style={{ cursor: "pointer", textAlign: "left" }}
+                    >
+                      <span>🤝</span>
+                      <strong>{adminStats.activeJobs} Active Jobs</strong>
+                      <small>Customer ↔ Provider connection dekho</small>
+                    </button>
+                  </div>
+                </section>
+
                 <div className="admin-quick-grid">
 
                   <button
@@ -3016,18 +3073,6 @@ export default function App() {
 
                             <option value="provider">
                               Provider
-                            </option>
-
-                            <option value="worker">
-                              Worker
-                            </option>
-
-                            <option value="student">
-                              Student
-                            </option>
-
-                            <option value="government">
-                              Government
                             </option>
                           </select>
 
