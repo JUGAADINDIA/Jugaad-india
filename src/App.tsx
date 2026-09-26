@@ -5121,9 +5121,22 @@ export default function App() {
                   ["🕐", "Time Match", "Free time dekhega"],
                   ["📍", "Nearby Match", "Location dekhega"],
                 ].map(([icon, title, sub]) => (
-                  <div key={title} style={{ background: "#fff", border: "2px solid #111", borderRadius: 16, padding: 10, textAlign: "center" }}>
+                  <button
+                    key={title}
+                    type="button"
+                    onClick={() => {
+                      if (title === "Smart Match") {
+                        setMessage("🧠 Arre wah! Dimag laga ke match dhoondh rahe hain… JUGAAD ki setting chal rahi hai 😎🔧");
+                      } else if (title === "Time Match") {
+                        setMessage("🕐 Time bhi hai aur kaam bhi? Bas bhai, JUGAAD ko bulao — khaali time ko earning time banate hain 💰😎");
+                      } else {
+                        setMessage("📍 Aas-paas hi jugaad mil sakta hai! Door jaane ki zarurat nahi, JUGAAD mohalle mein hi setting laga raha hai 😜📍");
+                      }
+                    }}
+                    style={{ background: "#fff", border: "2px solid #111", borderRadius: 16, padding: 10, textAlign: "center", cursor: "pointer", color: "#111", width: "100%" }}
+                  >
                     <div style={{ fontSize: 24 }}>{icon}</div><strong style={{ display: "block", fontSize: 13 }}>{title}</strong><small style={{ opacity: 0.7 }}>{sub}</small>
-                  </div>
+                  </button>
                 ))}
               </div>
 
