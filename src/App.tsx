@@ -15,6 +15,11 @@ type Profile = {
   preferred_language: string | null;
   preferred_address: string | null;
   service_area: string | null;
+  skills?: string | null;
+  available_days?: string[] | null;
+  available_from?: string | null;
+  available_to?: string | null;
+  is_available?: boolean | null;
   latitude: number | null;
   longitude: number | null;
   is_verified: boolean | null;
@@ -35,6 +40,9 @@ type RequestRow = {
   provider_id?: string | null;
   created_at?: string | null;
   create_at?: string | null;
+  required_day?: string | null;
+  required_from?: string | null;
+  required_to?: string | null;
 };
 
 type MatchRow = {
@@ -221,6 +229,14 @@ export default function App() {
   const [profileName, setProfileName] = useState("");
   const [profilePhone, setProfilePhone] = useState("");
   const [profileAddress, setProfileAddress] = useState("");
+  const [providerSkills, setProviderSkills] = useState("");
+  const [providerAvailableDays, setProviderAvailableDays] = useState<string[]>([]);
+  const [providerAvailableFrom, setProviderAvailableFrom] = useState("");
+  const [providerAvailableTo, setProviderAvailableTo] = useState("");
+  const [providerIsAvailable, setProviderIsAvailable] = useState(true);
+  const [requiredDay, setRequiredDay] = useState("");
+  const [requiredFrom, setRequiredFrom] = useState("");
+  const [requiredTo, setRequiredTo] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
 
   const [adminSection, setAdminSection] = useState("dashboard");
@@ -415,6 +431,11 @@ export default function App() {
     setProfileName(loadedProfile.full_name || "");
     setProfilePhone(loadedProfile.phone || "");
     setProfileAddress(loadedProfile.preferred_address || "");
+    setProviderSkills(loadedProfile.skills || "");
+    setProviderAvailableDays(loadedProfile.available_days || []);
+    setProviderAvailableFrom(loadedProfile.available_from || "");
+    setProviderAvailableTo(loadedProfile.available_to || "");
+    setProviderIsAvailable(loadedProfile.is_available !== false);
     setProfileLoading(false);
   };
 
@@ -578,7 +599,7 @@ export default function App() {
 
   /* ---------------- CUSTOMER / PROVIDER ---------------- */
 
-  const createRequestFromValues = async (requestNeed: string, requestCategory: string, requestLocation: string) => {
+  const createRequestFromValues = async (requestNeed: string, requestCategory: string, requestLocation: string, requestDay = requiredDay, requestFrom = requiredFrom, requestTo = requiredTo) => {
     if (!user || isProvider || isAdmin) return null;
 
     const cleanNeed = requestNeed.trim();
@@ -591,6 +612,9 @@ export default function App() {
         need: cleanNeed,
         category: requestCategory === "Sab" ? null : requestCategory,
         location: requestLocation.trim() || profile?.preferred_address || null,
+        required_day: requestDay || null,
+        required_from: requestFrom || null,
+        required_to: requestTo || null,
         status: STATUS.pending,
       })
       .select("*")
@@ -632,6 +656,9 @@ export default function App() {
             category: requestCategory,
             service: aiResult?.suggested_service || "",
             location: requestLocation.trim() || profile?.preferred_address || "",
+            requiredDay: requestDay || "",
+            requiredFrom: requestFrom || "",
+            requiredTo: requestTo || "",
           }),
         });
 
@@ -758,6 +785,9 @@ export default function App() {
         if (created) {
           setNeed("");
           setLocation("");
+          setRequiredDay("");
+          setRequiredFrom("");
+          setRequiredTo("");
           setAiPhoto(null);
           setVoiceBlob(null);
           setAiPhotoPreview("");
@@ -957,6 +987,9 @@ export default function App() {
       if (!created) return;
       setNeed("");
       setLocation("");
+      setRequiredDay("");
+      setRequiredFrom("");
+      setRequiredTo("");
       setMessage("🎉 JUGAAD lag gaya! Provider dhoondh rahe hain.");
       await loadRequests();
       setTab("requests");
@@ -984,6 +1017,30 @@ export default function App() {
       top: 0,
       behavior: "smooth",
     });
+  };
+
+  const providerCanMatchRequest = (request: RequestRow) => {
+    if (!isProvider || !profile) return false;
+    if (profile.is_available === false) return false;
+
+    const requestDay = String(request.required_day || "").trim().toLowerCase();
+    const providerDays = (profile.available_days || []).map((day) => String(day).trim().toLowerCase());
+    if (requestDay && providerDays.length > 0 && !providerDays.includes(requestDay)) return false;
+
+    const requestFrom = request.required_from || "";
+    const requestTo = request.required_to || "";
+    if (requestFrom && requestTo && profile.available_from && profile.available_to) {
+      if (requestFrom < profile.available_from || requestTo > profile.available_to) return false;
+    }
+
+    const requiredText = `${request.need || ""} ${request.category || ""}`.toLowerCase();
+    const skills = String(profile.skills || "").toLowerCase();
+    if (skills.trim()) {
+      const tokens = skills.split(/[,\n|]+/).map((x) => x.trim()).filter(Boolean);
+      if (tokens.length > 0 && !tokens.some((token) => requiredText.includes(token) || token.includes(String(request.category || "").toLowerCase()))) return false;
+    }
+
+    return true;
   };
 
   const acceptRequest = async (
@@ -1089,6 +1146,11 @@ export default function App() {
             profilePhone.trim() || null,
           preferred_address:
             profileAddress.trim() || null,
+          skills: isProvider ? providerSkills.trim() || null : profile?.skills || null,
+          available_days: isProvider ? providerAvailableDays : profile?.available_days || null,
+          available_from: isProvider ? providerAvailableFrom || null : profile?.available_from || null,
+          available_to: isProvider ? providerAvailableTo || null : profile?.available_to || null,
+          is_available: isProvider ? providerIsAvailable : profile?.is_available ?? true,
         });
 
     setSavingProfile(false);
@@ -4898,10 +4960,8 @@ export default function App() {
                   {providerRequests
                     .filter(
                       (r) =>
-                        r.status ===
-                          STATUS.pending ||
-                        r.provider_id ===
-                          user.id
+                        r.provider_id === user.id ||
+                        (r.status === STATUS.pending && providerCanMatchRequest(r))
                     )
                     .map((r) => (
                       <div
@@ -5092,6 +5152,16 @@ export default function App() {
                   />
                 </div>
 
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 10 }}>
+                  <select value={requiredDay} onChange={(e) => setRequiredDay(e.target.value)} style={{ padding: 12, borderRadius: 12 }}>
+                    <option value="">📅 Day (optional)</option>
+                    {['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map((day) => <option key={day} value={day}>{day}</option>)}
+                  </select>
+                  <input type="time" value={requiredFrom} onChange={(e) => setRequiredFrom(e.target.value)} style={{ padding: 12, borderRadius: 12 }} aria-label="Required from" />
+                  <input type="time" value={requiredTo} onChange={(e) => setRequiredTo(e.target.value)} style={{ padding: 12, borderRadius: 12 }} aria-label="Required to" />
+                </div>
+                <small style={{ display: "block", marginTop: 6, opacity: 0.72 }}>⏰ Kab chahiye? Time doge to JUGAAD available provider ke saath better match karega.</small>
+
                 <button
                   className="primary-btn large"
                   disabled={
@@ -5269,8 +5339,8 @@ export default function App() {
                   {providerRequests
                     .filter(
                       (r) =>
-                        r.status === STATUS.pending ||
-                        r.provider_id === user.id
+                        r.provider_id === user.id ||
+                        (r.status === STATUS.pending && providerCanMatchRequest(r))
                     )
                     .map((r) => (
                       <div
@@ -5338,8 +5408,8 @@ export default function App() {
 
                   {providerRequests.filter(
                     (r) =>
-                      r.status === STATUS.pending ||
-                      r.provider_id === user.id
+                      r.provider_id === user.id ||
+                      (r.status === STATUS.pending && providerCanMatchRequest(r))
                   ).length === 0 && (
                     <div className="empty-state">
                       <div>🛵</div>
@@ -5533,6 +5603,34 @@ export default function App() {
                     placeholder="Aapka address"
                   />
                 </label>
+
+                {isProvider && (
+                  <div style={{ marginTop: 12, padding: 14, borderRadius: 16, background: "#fffdf0", border: "1px solid #FFD600" }}>
+                    <strong>🧠 JUGAAD Skill + Time Matching</strong>
+                    <p style={{ margin: "6px 0 12px", opacity: 0.78 }}>Apni skill aur khaali time batao. JUGAAD matching mein wahi jobs dikhayega jo tum kar sakte ho.</p>
+                    <label>
+                      Skills
+                      <input value={providerSkills} onChange={(e) => setProviderSkills(e.target.value)} placeholder="Electrician, AC Repair, Computer, Delivery..." />
+                    </label>
+                    <label style={{ marginTop: 10 }}>
+                      Available Days
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                        {['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map((day) => {
+                          const selected = providerAvailableDays.includes(day);
+                          return <button type="button" key={day} onClick={() => setProviderAvailableDays((days) => selected ? days.filter((d) => d !== day) : [...days, day])} style={{ padding: "7px 9px", borderRadius: 10, border: selected ? "2px solid #111" : "1px solid #ccc", background: selected ? "#FFD600" : "#fff" }}>{day.slice(0,3)}</button>;
+                        })}
+                      </div>
+                    </label>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                      <label>Available From<input type="time" value={providerAvailableFrom} onChange={(e) => setProviderAvailableFrom(e.target.value)} /></label>
+                      <label>Available To<input type="time" value={providerAvailableTo} onChange={(e) => setProviderAvailableTo(e.target.value)} /></label>
+                    </div>
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
+                      <input type="checkbox" checked={providerIsAvailable} onChange={(e) => setProviderIsAvailable(e.target.checked)} />
+                      🟢 Abhi JUGAAD jobs ke liye available hoon
+                    </label>
+                  </div>
+                )}
 
                 <div className="profile-role">
 
