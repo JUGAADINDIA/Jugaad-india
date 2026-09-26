@@ -16,11 +16,10 @@ type Profile = {
   preferred_address: string | null;
   service_area: string | null;
   skills?: string | null;
-  available_days?: string | null;
+  available_days?: string[] | null;
   available_from?: string | null;
   available_to?: string | null;
   is_available?: boolean | null;
-  preferred_work_type?: string | null;
   latitude: number | null;
   longitude: number | null;
   is_verified: boolean | null;
@@ -41,6 +40,9 @@ type RequestRow = {
   provider_id?: string | null;
   created_at?: string | null;
   create_at?: string | null;
+  required_day?: string | null;
+  required_from?: string | null;
+  required_to?: string | null;
 };
 
 type MatchRow = {
@@ -206,6 +208,13 @@ export default function App() {
   const [voiceSeconds, setVoiceSeconds] = useState(0);
   const [voiceBlob, setVoiceBlob] = useState<Blob | null>(null);
   const [voiceTranscript, setVoiceTranscript] = useState("");
+  const [jugaadMode, setJugaadMode] = useState(true);
+  const [jugaadChain, setJugaadChain] = useState<string[]>([]);
+  const [jugaadBackup, setJugaadBackup] = useState(true);
+  const [impossibleJugaad, setImpossibleJugaad] = useState(false);
+  const [jugaadTogether, setJugaadTogether] = useState(false);
+  const [jugaadMemory, setJugaadMemory] = useState(false);
+  const [emergencyJugaad, setEmergencyJugaad] = useState(false);
   const [matchedProviders, setMatchedProviders] = useState<ProviderMatch[]>([]);
   const [matchingRequestId, setMatchingRequestId] = useState("");
   const [matchingStartedAt, setMatchingStartedAt] = useState<number | null>(null);
@@ -227,17 +236,15 @@ export default function App() {
   const [profileName, setProfileName] = useState("");
   const [profilePhone, setProfilePhone] = useState("");
   const [profileAddress, setProfileAddress] = useState("");
+  const [providerSkills, setProviderSkills] = useState("");
+  const [providerAvailableDays, setProviderAvailableDays] = useState<string[]>([]);
+  const [providerAvailableFrom, setProviderAvailableFrom] = useState("");
+  const [providerAvailableTo, setProviderAvailableTo] = useState("");
+  const [providerIsAvailable, setProviderIsAvailable] = useState(true);
+  const [requiredDay, setRequiredDay] = useState("");
+  const [requiredFrom, setRequiredFrom] = useState("");
+  const [requiredTo, setRequiredTo] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
-
-  // Skill + Time Matching controls
-  const [showSkillTimePanel, setShowSkillTimePanel] = useState(false);
-  const [skillInput, setSkillInput] = useState("");
-  const [availableDays, setAvailableDays] = useState("Today");
-  const [availableFrom, setAvailableFrom] = useState("16:00");
-  const [availableTo, setAvailableTo] = useState("19:00");
-  const [isAvailableForMatch, setIsAvailableForMatch] = useState(true);
-  const [preferredWorkType, setPreferredWorkType] = useState("Any suitable work");
-  const [savingAvailability, setSavingAvailability] = useState(false);
 
   const [adminSection, setAdminSection] = useState("dashboard");
   const [adminSearch, setAdminSearch] = useState("");
@@ -431,12 +438,11 @@ export default function App() {
     setProfileName(loadedProfile.full_name || "");
     setProfilePhone(loadedProfile.phone || "");
     setProfileAddress(loadedProfile.preferred_address || "");
-    setSkillInput(loadedProfile.skills || "");
-    setAvailableDays(loadedProfile.available_days || "Today");
-    setAvailableFrom(loadedProfile.available_from || "16:00");
-    setAvailableTo(loadedProfile.available_to || "19:00");
-    setIsAvailableForMatch(loadedProfile.is_available !== false);
-    setPreferredWorkType(loadedProfile.preferred_work_type || "Any suitable work");
+    setProviderSkills(loadedProfile.skills || "");
+    setProviderAvailableDays(loadedProfile.available_days || []);
+    setProviderAvailableFrom(loadedProfile.available_from || "");
+    setProviderAvailableTo(loadedProfile.available_to || "");
+    setProviderIsAvailable(loadedProfile.is_available !== false);
     setProfileLoading(false);
   };
 
@@ -600,19 +606,24 @@ export default function App() {
 
   /* ---------------- CUSTOMER / PROVIDER ---------------- */
 
-  const createRequestFromValues = async (requestNeed: string, requestCategory: string, requestLocation: string) => {
+  const createRequestFromValues = async (requestNeed: string, requestCategory: string, requestLocation: string, requestDay = requiredDay, requestFrom = requiredFrom, requestTo = requiredTo) => {
     if (!user || isProvider || isAdmin) return null;
 
     const cleanNeed = requestNeed.trim();
     if (!cleanNeed) return null;
+    const jugaadNeed = buildJugaadNeed(cleanNeed);
+    persistJugaadModes();
 
     const { data, error } = await supabase
       .from("requests")
       .insert({
         user_id: user.id,
-        need: cleanNeed,
+        need: jugaadNeed,
         category: requestCategory === "Sab" ? null : requestCategory,
         location: requestLocation.trim() || profile?.preferred_address || null,
+        required_day: requestDay || null,
+        required_from: requestFrom || null,
+        required_to: requestTo || null,
         status: STATUS.pending,
       })
       .select("*")
@@ -650,10 +661,14 @@ export default function App() {
           signal: controller.signal,
           body: JSON.stringify({
             requestId: request.id,
-            need: cleanNeed,
+            need: jugaadNeed,
             category: requestCategory,
+            jugaadFeatures: getJugaadContext(),
             service: aiResult?.suggested_service || "",
             location: requestLocation.trim() || profile?.preferred_address || "",
+            requiredDay: requestDay || "",
+            requiredFrom: requestFrom || "",
+            requiredTo: requestTo || "",
           }),
         });
 
@@ -669,7 +684,13 @@ export default function App() {
           setMatchedProviders((matchJson.providers || []).map((p: any) => ({ ...p, full_name: p.full_name || p.name })) as ProviderMatch[]);
           setMatchingRequestId("");
           setMatchingStartedAt(null);
-          setMessage("🎉 JUGAAD lag gaya! Provider ko kaam mil gaya. 😎");
+          setMessage(
+            emergencyJugaad
+              ? "🚨 Emergency JUGAAD lag gaya! Provider ko urgent kaam ka signal mil gaya. 😎"
+              : jugaadBackup
+              ? "🎉 JUGAAD lag gaya! Provider mil gaya — Backup bhi ready hai. 🛟"
+              : "🎉 JUGAAD lag gaya! Provider ko kaam mil gaya. 😎"
+          );
           await loadRequests();
         } else if (!matchResponse.ok && matchJson?.error) {
           console.warn("Provider matching:", matchJson.error);
@@ -780,6 +801,9 @@ export default function App() {
         if (created) {
           setNeed("");
           setLocation("");
+          setRequiredDay("");
+          setRequiredFrom("");
+          setRequiredTo("");
           setAiPhoto(null);
           setVoiceBlob(null);
           setAiPhotoPreview("");
@@ -959,6 +983,122 @@ export default function App() {
     setMessage("📸 Photo mil gayi. Ab JUGAAD AI dabao — photo ko samajhkar solution aur service dono nikalega.");
   };
 
+  const toggleJugaadChain = (service: string) => {
+    setJugaadChain((items) => items.includes(service) ? items.filter((x) => x !== service) : [...items, service]);
+  };
+
+  /* ---------------- PHASE 1 + PHASE 2 JUGAAD ENGINE ----------------
+     These controls deliberately sit on top of the existing request flow.
+     Existing Supabase columns are not changed; feature state is carried
+     through the request text and matching API payload so the current schema
+     remains compatible.
+  ------------------------------------------------------------------- */
+
+  const getJugaadContext = () => ({
+    mode: jugaadMode,
+    chain: [...jugaadChain],
+    backup: jugaadBackup,
+    impossible: impossibleJugaad,
+    together: jugaadTogether,
+    memory: jugaadMemory,
+    emergency: emergencyJugaad,
+  });
+
+  const buildJugaadNeed = (baseNeed: string) => {
+    const parts = [baseNeed.trim()];
+
+    if (jugaadChain.length > 0) {
+      parts.push(`JUGAAD Chain: ${jugaadChain.join(" → ")}`);
+    }
+
+    if (impossibleJugaad) {
+      parts.push("Impossible JUGAAD: custom legitimate solution required");
+    }
+
+    if (jugaadTogether) {
+      parts.push("JUGAAD Together: nearby similar requests may be grouped");
+    }
+
+    if (jugaadMemory) {
+      parts.push("JUGAAD Memory: use previous customer JUGAAD context when available");
+    }
+
+    if (emergencyJugaad) {
+      parts.push("Emergency JUGAAD: urgent request");
+    }
+
+    return parts.filter(Boolean).join(" | ");
+  };
+
+  const persistJugaadModes = () => {
+    try {
+      localStorage.setItem("jugaad_phase_modes", JSON.stringify(getJugaadContext()));
+    } catch (error) {
+      console.warn("JUGAAD feature preferences could not be saved", error);
+    }
+  };
+
+  const rematchWithBackup = async (requestId: string) => {
+    if (!user || !jugaadBackup) return;
+
+    const request = requests.find((item) => item.id === requestId);
+    if (!request) return;
+
+    setMatchingRequestId(requestId);
+    setMatchingStartedAt(Date.now());
+    setMatchingSecondsLeft(180);
+    setMatchedProviders([]);
+    setMessage("🛟 Provider ne JUGAAD chhoda? Tension nahi — Backup JUGAAD provider dhoondh raha hai 😎");
+
+    try {
+      const session = await supabase.auth.getSession();
+      const response = await fetch("/api/match-provider", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.data.session?.access_token || ""}`,
+        },
+        body: JSON.stringify({
+          requestId,
+          need: request.need || "",
+          category: request.category || "",
+          location: request.location || "",
+          backup: true,
+          jugaadFeatures: getJugaadContext(),
+        }),
+      });
+
+      const raw = await response.text();
+      let json: any = null;
+      try { json = raw ? JSON.parse(raw) : null; } catch {}
+
+      if (response.ok && Array.isArray(json?.providers) && json.providers.length > 0) {
+        setMatchedProviders(json.providers.map((provider: any) => ({
+          ...provider,
+          full_name: provider.full_name || provider.name,
+        })) as ProviderMatch[]);
+        setMatchingRequestId("");
+        setMatchingStartedAt(null);
+        setMessage("🛟 Backup JUGAAD mil gaya! Kaam rukne nahi diya 😎");
+      } else {
+        setMessage("🛟 Backup JUGAAD abhi provider dhoondh raha hai. Request pending rakhi hai.");
+      }
+    } catch (error) {
+      console.error("backup rematch:", error);
+      setMessage("🛟 Backup JUGAAD ko network problem hui. Thodi der baad dobara try karo.");
+    }
+  };
+
+  const activateJugaadFeature = (feature: string) => {
+    if (feature === "chain") setJugaadChain((items) => items.length ? items : ["Electrician", "Plumber"]);
+    if (feature === "impossible") setImpossibleJugaad(true);
+    if (feature === "together") setJugaadTogether(true);
+    if (feature === "memory") setJugaadMemory(true);
+    if (feature === "emergency") setEmergencyJugaad(true);
+    persistJugaadModes();
+    setMessage(`😎 ${feature === "chain" ? "JUGAAD Chain" : feature === "impossible" ? "Impossible JUGAAD" : feature === "together" ? "JUGAAD Together" : feature === "memory" ? "JUGAAD Memory" : "Emergency JUGAAD"} ON! Ab JUGAAD apna kaam karega.`);
+  };
+
   const createRequest = async () => {
     if (!user) {
       setMessage("🔐 Pehle login karo.");
@@ -979,6 +1119,9 @@ export default function App() {
       if (!created) return;
       setNeed("");
       setLocation("");
+      setRequiredDay("");
+      setRequiredFrom("");
+      setRequiredTo("");
       setMessage("🎉 JUGAAD lag gaya! Provider dhoondh rahe hain.");
       await loadRequests();
       setTab("requests");
@@ -1006,6 +1149,30 @@ export default function App() {
       top: 0,
       behavior: "smooth",
     });
+  };
+
+  const providerCanMatchRequest = (request: RequestRow) => {
+    if (!isProvider || !profile) return false;
+    if (profile.is_available === false) return false;
+
+    const requestDay = String(request.required_day || "").trim().toLowerCase();
+    const providerDays = (profile.available_days || []).map((day) => String(day).trim().toLowerCase());
+    if (requestDay && providerDays.length > 0 && !providerDays.includes(requestDay)) return false;
+
+    const requestFrom = request.required_from || "";
+    const requestTo = request.required_to || "";
+    if (requestFrom && requestTo && profile.available_from && profile.available_to) {
+      if (requestFrom < profile.available_from || requestTo > profile.available_to) return false;
+    }
+
+    const requiredText = `${request.need || ""} ${request.category || ""}`.toLowerCase();
+    const skills = String(profile.skills || "").toLowerCase();
+    if (skills.trim()) {
+      const tokens = skills.split(/[,\n|]+/).map((x) => x.trim()).filter(Boolean);
+      if (tokens.length > 0 && !tokens.some((token) => requiredText.includes(token) || token.includes(String(request.category || "").toLowerCase()))) return false;
+    }
+
+    return true;
   };
 
   const acceptRequest = async (
@@ -1085,10 +1252,18 @@ export default function App() {
     setMessage(
       status === STATUS.completed
         ? "🎉 Kaam complete mark ho gaya!"
+        : status === STATUS.cancelled && jugaadBackup
+        ? "🛟 Provider cancel hua — Backup JUGAAD activate ho raha hai!"
         : `✅ Status: ${statusLabel(status)}`
     );
 
     await loadRequests();
+
+    if (status === STATUS.cancelled && jugaadBackup && !isAdmin) {
+      window.setTimeout(() => {
+        void rematchWithBackup(requestId);
+      }, 250);
+    }
 
     if (isAdmin) {
       await loadAdminData();
@@ -1111,12 +1286,11 @@ export default function App() {
             profilePhone.trim() || null,
           preferred_address:
             profileAddress.trim() || null,
-          skills: skillInput.trim() || null,
-          available_days: availableDays || null,
-          available_from: availableFrom || null,
-          available_to: availableTo || null,
-          is_available: isAvailableForMatch,
-          preferred_work_type: preferredWorkType || null,
+          skills: isProvider ? providerSkills.trim() || null : profile?.skills || null,
+          available_days: isProvider ? providerAvailableDays : profile?.available_days || null,
+          available_from: isProvider ? providerAvailableFrom || null : profile?.available_from || null,
+          available_to: isProvider ? providerAvailableTo || null : profile?.available_to || null,
+          is_available: isProvider ? providerIsAvailable : profile?.is_available ?? true,
         });
 
     setSavingProfile(false);
@@ -1133,34 +1307,6 @@ export default function App() {
     setMessage(
       "💾 Profile save ho gaya!"
     );
-  };
-
-  const saveAvailability = async () => {
-    if (!user || !isProvider) return;
-
-    setSavingAvailability(true);
-    const { error } = await supabase
-      .from("profiles")
-      .update({
-        skills: skillInput.trim() || null,
-        available_days: availableDays || null,
-        available_from: availableFrom || null,
-        available_to: availableTo || null,
-        is_available: isAvailableForMatch,
-        preferred_work_type: preferredWorkType || null,
-      })
-      .eq("id", user.id);
-
-    setSavingAvailability(false);
-
-    if (error) {
-      setMessage(`❌ Availability save nahi hui: ${error.message}`);
-      return;
-    }
-
-    await loadProfile(user.id);
-    setShowSkillTimePanel(false);
-    setMessage("😎 Skill + Time JUGAAD save ho gaya! Ab matching aapke free time ke hisaab se hogi.");
   };
 
   const switchToProvider = async () => {
@@ -4936,86 +5082,6 @@ export default function App() {
             {isProvider ? (
               <section className="request-box provider-box">
 
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                    gap: 10,
-                    marginBottom: 18,
-                  }}
-                >
-                  {[
-                    ["🛠️", "Meri Skills", skillInput || "Skills add karo"],
-                    ["🕐", "Mera Free Time", `${availableFrom} - ${availableTo}`],
-                    ["📅", "Available Days", availableDays],
-                    [isAvailableForMatch ? "🟢" : "🔴", "Availability", isAvailableForMatch ? "Main available hoon" : "Abhi unavailable"],
-                    ["📍", "Service Area", profile?.service_area || profile?.preferred_address || "Location set karo"],
-                    ["💰", "Earning Match", "Skill + Time + Location"],
-                  ].map(([icon, title, sub]) => (
-                    <button
-                      key={title}
-                      type="button"
-                      onClick={() => setShowSkillTimePanel(true)}
-                      style={{
-                        textAlign: "left",
-                        border: "2px solid #111",
-                        background: "#FFD600",
-                        borderRadius: 18,
-                        padding: "13px 12px",
-                        cursor: "pointer",
-                        boxShadow: "3px 3px 0 #111",
-                      }}
-                    >
-                      <div style={{ fontSize: 25 }}>{icon}</div>
-                      <strong style={{ display: "block", marginTop: 4 }}>{title}</strong>
-                      <small style={{ display: "block", marginTop: 3, opacity: 0.78 }}>{sub}</small>
-                    </button>
-                  ))}
-                </div>
-
-                {showSkillTimePanel && (
-                  <div style={{ background: "#111", color: "#fff", borderRadius: 20, padding: 16, marginBottom: 18 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
-                      <div>
-                        <strong style={{ fontSize: 19 }}>😎 Apna Earning JUGAAD Set Karo</strong>
-                        <div style={{ opacity: 0.8, marginTop: 3 }}>Aapki skill + free time dekhkar JUGAAD matching karega.</div>
-                      </div>
-                      <button type="button" onClick={() => setShowSkillTimePanel(false)} style={{ border: 0, background: "#fff", borderRadius: 999, width: 34, height: 34, cursor: "pointer" }}>×</button>
-                    </div>
-
-                    <label style={{ display: "block", marginTop: 14 }}>🛠️ Aapko kya-kya aata hai?
-                      <input value={skillInput} onChange={(e) => setSkillInput(e.target.value)} placeholder="Data entry, computer, delivery..." style={{ width: "100%", marginTop: 6, padding: 12, borderRadius: 12, border: 0 }} />
-                    </label>
-
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
-                      <label>🕐 From
-                        <input type="time" value={availableFrom} onChange={(e) => setAvailableFrom(e.target.value)} style={{ width: "100%", marginTop: 6, padding: 11, borderRadius: 12, border: 0 }} />
-                      </label>
-                      <label>🕐 To
-                        <input type="time" value={availableTo} onChange={(e) => setAvailableTo(e.target.value)} style={{ width: "100%", marginTop: 6, padding: 11, borderRadius: 12, border: 0 }} />
-                      </label>
-                    </div>
-
-                    <label style={{ display: "block", marginTop: 12 }}>📅 Available Days
-                      <select value={availableDays} onChange={(e) => setAvailableDays(e.target.value)} style={{ width: "100%", marginTop: 6, padding: 11, borderRadius: 12, border: 0 }}>
-                        <option>Today</option><option>Tomorrow</option><option>Daily</option><option>Mon-Fri</option><option>Sat-Sun</option><option>Custom</option>
-                      </select>
-                    </label>
-
-                    <label style={{ display: "block", marginTop: 12 }}>💼 Work Preference
-                      <input value={preferredWorkType} onChange={(e) => setPreferredWorkType(e.target.value)} placeholder="Part-time / Any suitable work" style={{ width: "100%", marginTop: 6, padding: 12, borderRadius: 12, border: 0 }} />
-                    </label>
-
-                    <button type="button" onClick={() => setIsAvailableForMatch(!isAvailableForMatch)} style={{ marginTop: 12, width: "100%", padding: 12, borderRadius: 12, border: 0, fontWeight: 800, cursor: "pointer" }}>
-                      {isAvailableForMatch ? "🟢 Main Available Hoon — Matching ON" : "🔴 Main Available Nahi — Matching OFF"}
-                    </button>
-
-                    <button type="button" className="primary-btn" disabled={savingAvailability} onClick={saveAvailability} style={{ width: "100%", marginTop: 12 }}>
-                      {savingAvailability ? "Saving..." : "💾 Save Skill + Time JUGAAD"}
-                    </button>
-                  </div>
-                )}
-
                 <div className="section-title">
 
                   <div>
@@ -5034,10 +5100,8 @@ export default function App() {
                   {providerRequests
                     .filter(
                       (r) =>
-                        r.status ===
-                          STATUS.pending ||
-                        r.provider_id ===
-                          user.id
+                        r.provider_id === user.id ||
+                        (r.status === STATUS.pending && providerCanMatchRequest(r))
                     )
                     .map((r) => (
                       <div
@@ -5115,31 +5179,6 @@ export default function App() {
                 </div>
               </section>
             ) : (
-              <> <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, marginBottom: 14 }}>
-                {[
-                  ["🧠", "Smart Match", "Skill dekhega"],
-                  ["🕐", "Time Match", "Free time dekhega"],
-                  ["📍", "Nearby Match", "Location dekhega"],
-                ].map(([icon, title, sub]) => (
-                  <button
-                    key={title}
-                    type="button"
-                    onClick={() => {
-                      if (title === "Smart Match") {
-                        setMessage("🧠 Arre wah! Dimag laga ke match dhoondh rahe hain… JUGAAD ki setting chal rahi hai 😎🔧");
-                      } else if (title === "Time Match") {
-                        setMessage("🕐 Time bhi hai aur kaam bhi? Bas bhai, JUGAAD ko bulao — khaali time ko earning time banate hain 💰😎");
-                      } else {
-                        setMessage("📍 Aas-paas hi jugaad mil sakta hai! Door jaane ki zarurat nahi, JUGAAD mohalle mein hi setting laga raha hai 😜📍");
-                      }
-                    }}
-                    style={{ background: "#fff", border: "2px solid #111", borderRadius: 16, padding: 10, textAlign: "center", cursor: "pointer", color: "#111", width: "100%" }}
-                  >
-                    <div style={{ fontSize: 24 }}>{icon}</div><strong style={{ display: "block", fontSize: 13 }}>{title}</strong><small style={{ opacity: 0.7 }}>{sub}</small>
-                  </button>
-                ))}
-              </div>
-
               <section className="request-box">
 
                 <div className="section-title">
@@ -5209,6 +5248,48 @@ export default function App() {
                   )}
                 </div>
 
+                <div className="jugaad-feature-panel" style={{ marginTop: 14, padding: 14, borderRadius: 18, border: "2px dashed #111" }}>
+                  <strong>🚀 JUGAAD Super Powers</strong>
+                  <p style={{ margin: "5px 0 10px", opacity: 0.78 }}>Problem simple ho ya “bhai iska bhi jugaad hai?” — mode choose karo.</p>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button type="button" className={jugaadMode ? "primary-small-btn" : "outline-btn"} onClick={() => { setJugaadMode(!jugaadMode); window.setTimeout(persistJugaadModes, 0); }}>🧠 JUGAAD Mode</button>
+                    <button type="button" className={jugaadBackup ? "primary-small-btn" : "outline-btn"} onClick={() => { setJugaadBackup(!jugaadBackup); window.setTimeout(persistJugaadModes, 0); }}>🛟 Backup {jugaadBackup ? "ON" : "OFF"}</button>
+                    <button type="button" className="outline-btn" onClick={() => activateJugaadFeature("chain")}>🔗 Chain</button>
+                    <button type="button" className="outline-btn" onClick={() => activateJugaadFeature("impossible")}>🧩 Impossible</button>
+                    <button type="button" className="outline-btn" onClick={() => activateJugaadFeature("together")}>👥 Together</button>
+                    <button type="button" className="outline-btn" onClick={() => activateJugaadFeature("memory")}>🧠 Memory</button>
+                    <button type="button" className="outline-btn" onClick={() => activateJugaadFeature("emergency")}>🚨 Emergency</button>
+                  </div>
+                  {jugaadChain.length > 0 && <div style={{ marginTop: 9 }}>🔗 Chain: {jugaadChain.join(" → ")} <button type="button" className="text-btn" onClick={() => setJugaadChain([])}>Clear</button></div>}
+                  {(impossibleJugaad || jugaadTogether || jugaadMemory || emergencyJugaad) && <div style={{ marginTop: 8, fontWeight: 700 }}>✨ {impossibleJugaad ? "Custom JUGAAD ready" : jugaadTogether ? "Nearby similar requests ko group karne ka mode ready" : jugaadMemory ? "Previous JUGAAD context ready" : "Urgent matching mode ready"}</div>}
+                  {jugaadMode && <small style={{ display: "block", marginTop: 8 }}>🤖 Category select karna optional — AI need se right JUGAAD decide karega.</small>}
+                  <div style={{ marginTop: 10, display: "flex", gap: 7, flexWrap: "wrap" }}>
+                    {services.slice(0, 6).map((service) => (
+                      <button key={service.name} type="button" className={jugaadChain.includes(service.name) ? "primary-small-btn" : "outline-btn"} onClick={() => toggleJugaadChain(service.name)}>
+                        {service.icon} {service.name}
+                      </button>
+                    ))}
+                  </div>
+                  <small style={{ display: "block", marginTop: 8 }}>🔗 Multiple kaam ho to providers ko sequence mein connect kiya ja sakta hai.</small>
+                  {jugaadBackup && <small style={{ display: "block", marginTop: 4 }}>🛟 Provider cancel kare to backup/rematch option ready rahega.</small>}
+                  {emergencyJugaad && <small style={{ display: "block", marginTop: 4 }}>🚨 Emergency mode: urgent request ko priority signal diya gaya hai.</small>}
+                  {jugaadMemory && <small style={{ display: "block", marginTop: 4 }}>🧠 Memory mode: repeat JUGAAD ke liye previous context use karne ka signal ready hai.</small>}
+                  <small style={{ display: "block", marginTop: 6, fontWeight: 700 }}>😎 Ek problem, multiple raaste — JUGAAD rukega nahi.</small>
+                  <small style={{ display: "block", marginTop: 3 }}>🇮🇳 Phase 1 + Phase 2 controls isi request flow ke andar rakhe gaye hain.</small>
+                  <div style={{ marginTop: 12, padding: 12, borderRadius: 14, background: "#fff", color: "#111" }}>
+                    <strong>🛠️ Active JUGAAD Plan</strong>
+                    <div style={{ marginTop: 6, display: "grid", gap: 5 }}>
+                      <span>{jugaadMode ? "🧠 Mode: AI khud right service/skill decide karega" : "📝 Mode: normal request"}</span>
+                      <span>{jugaadChain.length ? `🔗 Chain: ${jugaadChain.join(" → ")}` : "🔗 Chain: single provider flow"}</span>
+                      <span>{jugaadBackup ? "🛟 Backup: provider cancel hone par rematch" : "🛟 Backup: off"}</span>
+                      <span>{impossibleJugaad ? "🧩 Impossible: custom legitimate requirement" : "🧩 Impossible: off"}</span>
+                      <span>{jugaadTogether ? "👥 Together: similar nearby requests grouping signal" : "👥 Together: off"}</span>
+                      <span>{jugaadMemory ? "🧠 Memory: repeat JUGAAD context signal" : "🧠 Memory: off"}</span>
+                      <span>{emergencyJugaad ? "🚨 Emergency: urgent matching signal" : "🚨 Emergency: off"}</span>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="category-row">
 
                   {categories.map(
@@ -5253,6 +5334,16 @@ export default function App() {
                   />
                 </div>
 
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 10 }}>
+                  <select value={requiredDay} onChange={(e) => setRequiredDay(e.target.value)} style={{ padding: 12, borderRadius: 12 }}>
+                    <option value="">📅 Day (optional)</option>
+                    {['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map((day) => <option key={day} value={day}>{day}</option>)}
+                  </select>
+                  <input type="time" value={requiredFrom} onChange={(e) => setRequiredFrom(e.target.value)} style={{ padding: 12, borderRadius: 12 }} aria-label="Required from" />
+                  <input type="time" value={requiredTo} onChange={(e) => setRequiredTo(e.target.value)} style={{ padding: 12, borderRadius: 12 }} aria-label="Required to" />
+                </div>
+                <small style={{ display: "block", marginTop: 6, opacity: 0.72 }}>⏰ Kab chahiye? Time doge to JUGAAD available provider ke saath better match karega.</small>
+
                 <button
                   className="primary-btn large"
                   disabled={
@@ -5267,6 +5358,7 @@ export default function App() {
                     : "JUGAAD Karo →"}
                 </button>
               </section>
+            )}
 
             <section className="services-section">
 
@@ -5336,8 +5428,7 @@ export default function App() {
                 </div>
               </section>
             )}
-              </>
-        )} </>
+          </>
         )}
 
         {tab === "explore" && (
@@ -5430,8 +5521,8 @@ export default function App() {
                   {providerRequests
                     .filter(
                       (r) =>
-                        r.status === STATUS.pending ||
-                        r.provider_id === user.id
+                        r.provider_id === user.id ||
+                        (r.status === STATUS.pending && providerCanMatchRequest(r))
                     )
                     .map((r) => (
                       <div
@@ -5499,8 +5590,8 @@ export default function App() {
 
                   {providerRequests.filter(
                     (r) =>
-                      r.status === STATUS.pending ||
-                      r.provider_id === user.id
+                      r.provider_id === user.id ||
+                      (r.status === STATUS.pending && providerCanMatchRequest(r))
                   ).length === 0 && (
                     <div className="empty-state">
                       <div>🛵</div>
@@ -5694,6 +5785,34 @@ export default function App() {
                     placeholder="Aapka address"
                   />
                 </label>
+
+                {isProvider && (
+                  <div style={{ marginTop: 12, padding: 14, borderRadius: 16, background: "#fffdf0", border: "1px solid #FFD600" }}>
+                    <strong>🧠 JUGAAD Skill + Time Matching</strong>
+                    <p style={{ margin: "6px 0 12px", opacity: 0.78 }}>Apni skill aur khaali time batao. JUGAAD matching mein wahi jobs dikhayega jo tum kar sakte ho.</p>
+                    <label>
+                      Skills
+                      <input value={providerSkills} onChange={(e) => setProviderSkills(e.target.value)} placeholder="Electrician, AC Repair, Computer, Delivery..." />
+                    </label>
+                    <label style={{ marginTop: 10 }}>
+                      Available Days
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                        {['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map((day) => {
+                          const selected = providerAvailableDays.includes(day);
+                          return <button type="button" key={day} onClick={() => setProviderAvailableDays((days) => selected ? days.filter((d) => d !== day) : [...days, day])} style={{ padding: "7px 9px", borderRadius: 10, border: selected ? "2px solid #111" : "1px solid #ccc", background: selected ? "#FFD600" : "#fff" }}>{day.slice(0,3)}</button>;
+                        })}
+                      </div>
+                    </label>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                      <label>Available From<input type="time" value={providerAvailableFrom} onChange={(e) => setProviderAvailableFrom(e.target.value)} /></label>
+                      <label>Available To<input type="time" value={providerAvailableTo} onChange={(e) => setProviderAvailableTo(e.target.value)} /></label>
+                    </div>
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
+                      <input type="checkbox" checked={providerIsAvailable} onChange={(e) => setProviderIsAvailable(e.target.checked)} />
+                      🟢 Abhi JUGAAD jobs ke liye available hoon
+                    </label>
+                  </div>
+                )}
 
                 <div className="profile-role">
 
