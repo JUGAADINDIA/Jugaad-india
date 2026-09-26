@@ -5179,38 +5179,7 @@ export default function App() {
                 </div>
               </section>
             ) : (
-              <>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, marginBottom: 14 }}>
-                  <button
-                    type="button"
-                    onClick={() => setMessage("🧠 Arre wah! Dimag laga ke match dhoondh rahe hain… JUGAAD ki setting chal rahi hai 😎🔧")}
-                    style={{ background: "#fff", border: "2px solid #111", borderRadius: 16, padding: 12, textAlign: "center", cursor: "pointer" }}
-                  >
-                    <div style={{ fontSize: 24 }}>🧠</div>
-                    <strong style={{ display: "block", fontSize: 13 }}>Smart Match</strong>
-                    <small style={{ opacity: 0.7 }}>Skill dekhega</small>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMessage("📍 Paas wala JUGAAD pakad rahe hain! Door jaane ki zarurat nahi bhai 😄🏃")}
-                    style={{ background: "#fff", border: "2px solid #111", borderRadius: 16, padding: 12, textAlign: "center", cursor: "pointer" }}
-                  >
-                    <div style={{ fontSize: 24 }}>📍</div>
-                    <strong style={{ display: "block", fontSize: 13 }}>Smart Nearby</strong>
-                    <small style={{ opacity: 0.7 }}>Location dekhega</small>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMessage("⏰ Time batao, JUGAAD wale ko usi hisaab se bulaate hain! 😎🤝")}
-                    style={{ background: "#fff", border: "2px solid #111", borderRadius: 16, padding: 12, textAlign: "center", cursor: "pointer" }}
-                  >
-                    <div style={{ fontSize: 24 }}>⏰</div>
-                    <strong style={{ display: "block", fontSize: 13 }}>Time Match</strong>
-                    <small style={{ opacity: 0.7 }}>Free time dekhega</small>
-                  </button>
-                </div>
-
-                <section className="request-box">
+              <section className="request-box">
 
                 <div className="section-title">
 
@@ -5228,6 +5197,51 @@ export default function App() {
                   <div className="voice-hint">
                     🎙️
                   </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                    gap: 10,
+                    marginBottom: 14,
+                  }}
+                >
+                  {[
+                    ["🧠", "Smart Match", "Skill dekhega"],
+                    ["📍", "Smart Nearby", "Aas-paas dekhega"],
+                    ["⏰", "Time Match", "Free time dekhega"],
+                  ].map(([icon, title, sub]) => (
+                    <button
+                      key={title}
+                      type="button"
+                      onClick={() => {
+                        if (title === "Smart Match") {
+                          setMessage("🧠 Arre wah! Dimag laga ke match dhoondh rahe hain… JUGAAD ki setting chal rahi hai 😎🔧");
+                        } else if (title === "Smart Nearby") {
+                          setMessage("📍 Aas-paas hi jugaad mil sakta hai! Door jaane ki zarurat nahi, JUGAAD mohalle mein hi setting laga raha hai 😜📍");
+                        } else {
+                          setMessage("🕐 Time bhi hai aur kaam bhi? Bas bhai, JUGAAD ko bulao — khaali time ko earning time banate hain 💰😎");
+                        }
+                      }}
+                      style={{
+                        background: "#fff",
+                        border: "2px solid #111",
+                        borderRadius: 16,
+                        padding: 10,
+                        textAlign: "center",
+                        cursor: "pointer",
+                        color: "#111",
+                        width: "100%",
+                      }}
+                    >
+                      <div style={{ fontSize: 24 }}>{icon}</div>
+                      <strong style={{ display: "block", fontSize: 13 }}>
+                        {title}
+                      </strong>
+                      <small style={{ opacity: 0.7 }}>{sub}</small>
+                    </button>
+                  ))}
                 </div>
 
                 <textarea
@@ -5458,7 +5472,6 @@ export default function App() {
                   ))}
                 </div>
               </section>
-              </>
             )}
           </>
         )}
