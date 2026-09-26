@@ -16,10 +16,11 @@ type Profile = {
   preferred_address: string | null;
   service_area: string | null;
   skills?: string | null;
-  available_days?: string[] | null;
+  available_days?: string | null;
   available_from?: string | null;
   available_to?: string | null;
   is_available?: boolean | null;
+  preferred_work_type?: string | null;
   latitude: number | null;
   longitude: number | null;
   is_verified: boolean | null;
@@ -40,9 +41,6 @@ type RequestRow = {
   provider_id?: string | null;
   created_at?: string | null;
   create_at?: string | null;
-  required_day?: string | null;
-  required_from?: string | null;
-  required_to?: string | null;
 };
 
 type MatchRow = {
@@ -229,15 +227,17 @@ export default function App() {
   const [profileName, setProfileName] = useState("");
   const [profilePhone, setProfilePhone] = useState("");
   const [profileAddress, setProfileAddress] = useState("");
-  const [providerSkills, setProviderSkills] = useState("");
-  const [providerAvailableDays, setProviderAvailableDays] = useState<string[]>([]);
-  const [providerAvailableFrom, setProviderAvailableFrom] = useState("");
-  const [providerAvailableTo, setProviderAvailableTo] = useState("");
-  const [providerIsAvailable, setProviderIsAvailable] = useState(true);
-  const [requiredDay, setRequiredDay] = useState("");
-  const [requiredFrom, setRequiredFrom] = useState("");
-  const [requiredTo, setRequiredTo] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
+
+  // Skill + Time Matching controls
+  const [showSkillTimePanel, setShowSkillTimePanel] = useState(false);
+  const [skillInput, setSkillInput] = useState("");
+  const [availableDays, setAvailableDays] = useState("Today");
+  const [availableFrom, setAvailableFrom] = useState("16:00");
+  const [availableTo, setAvailableTo] = useState("19:00");
+  const [isAvailableForMatch, setIsAvailableForMatch] = useState(true);
+  const [preferredWorkType, setPreferredWorkType] = useState("Any suitable work");
+  const [savingAvailability, setSavingAvailability] = useState(false);
 
   const [adminSection, setAdminSection] = useState("dashboard");
   const [adminSearch, setAdminSearch] = useState("");
@@ -431,11 +431,12 @@ export default function App() {
     setProfileName(loadedProfile.full_name || "");
     setProfilePhone(loadedProfile.phone || "");
     setProfileAddress(loadedProfile.preferred_address || "");
-    setProviderSkills(loadedProfile.skills || "");
-    setProviderAvailableDays(loadedProfile.available_days || []);
-    setProviderAvailableFrom(loadedProfile.available_from || "");
-    setProviderAvailableTo(loadedProfile.available_to || "");
-    setProviderIsAvailable(loadedProfile.is_available !== false);
+    setSkillInput(loadedProfile.skills || "");
+    setAvailableDays(loadedProfile.available_days || "Today");
+    setAvailableFrom(loadedProfile.available_from || "16:00");
+    setAvailableTo(loadedProfile.available_to || "19:00");
+    setIsAvailableForMatch(loadedProfile.is_available !== false);
+    setPreferredWorkType(loadedProfile.preferred_work_type || "Any suitable work");
     setProfileLoading(false);
   };
 
@@ -599,7 +600,7 @@ export default function App() {
 
   /* ---------------- CUSTOMER / PROVIDER ---------------- */
 
-  const createRequestFromValues = async (requestNeed: string, requestCategory: string, requestLocation: string, requestDay = requiredDay, requestFrom = requiredFrom, requestTo = requiredTo) => {
+  const createRequestFromValues = async (requestNeed: string, requestCategory: string, requestLocation: string) => {
     if (!user || isProvider || isAdmin) return null;
 
     const cleanNeed = requestNeed.trim();
@@ -612,9 +613,6 @@ export default function App() {
         need: cleanNeed,
         category: requestCategory === "Sab" ? null : requestCategory,
         location: requestLocation.trim() || profile?.preferred_address || null,
-        required_day: requestDay || null,
-        required_from: requestFrom || null,
-        required_to: requestTo || null,
         status: STATUS.pending,
       })
       .select("*")
@@ -656,9 +654,6 @@ export default function App() {
             category: requestCategory,
             service: aiResult?.suggested_service || "",
             location: requestLocation.trim() || profile?.preferred_address || "",
-            requiredDay: requestDay || "",
-            requiredFrom: requestFrom || "",
-            requiredTo: requestTo || "",
           }),
         });
 
@@ -785,9 +780,6 @@ export default function App() {
         if (created) {
           setNeed("");
           setLocation("");
-          setRequiredDay("");
-          setRequiredFrom("");
-          setRequiredTo("");
           setAiPhoto(null);
           setVoiceBlob(null);
           setAiPhotoPreview("");
@@ -987,9 +979,6 @@ export default function App() {
       if (!created) return;
       setNeed("");
       setLocation("");
-      setRequiredDay("");
-      setRequiredFrom("");
-      setRequiredTo("");
       setMessage("🎉 JUGAAD lag gaya! Provider dhoondh rahe hain.");
       await loadRequests();
       setTab("requests");
@@ -1017,30 +1006,6 @@ export default function App() {
       top: 0,
       behavior: "smooth",
     });
-  };
-
-  const providerCanMatchRequest = (request: RequestRow) => {
-    if (!isProvider || !profile) return false;
-    if (profile.is_available === false) return false;
-
-    const requestDay = String(request.required_day || "").trim().toLowerCase();
-    const providerDays = (profile.available_days || []).map((day) => String(day).trim().toLowerCase());
-    if (requestDay && providerDays.length > 0 && !providerDays.includes(requestDay)) return false;
-
-    const requestFrom = request.required_from || "";
-    const requestTo = request.required_to || "";
-    if (requestFrom && requestTo && profile.available_from && profile.available_to) {
-      if (requestFrom < profile.available_from || requestTo > profile.available_to) return false;
-    }
-
-    const requiredText = `${request.need || ""} ${request.category || ""}`.toLowerCase();
-    const skills = String(profile.skills || "").toLowerCase();
-    if (skills.trim()) {
-      const tokens = skills.split(/[,\n|]+/).map((x) => x.trim()).filter(Boolean);
-      if (tokens.length > 0 && !tokens.some((token) => requiredText.includes(token) || token.includes(String(request.category || "").toLowerCase()))) return false;
-    }
-
-    return true;
   };
 
   const acceptRequest = async (
@@ -1146,11 +1111,12 @@ export default function App() {
             profilePhone.trim() || null,
           preferred_address:
             profileAddress.trim() || null,
-          skills: isProvider ? providerSkills.trim() || null : profile?.skills || null,
-          available_days: isProvider ? providerAvailableDays : profile?.available_days || null,
-          available_from: isProvider ? providerAvailableFrom || null : profile?.available_from || null,
-          available_to: isProvider ? providerAvailableTo || null : profile?.available_to || null,
-          is_available: isProvider ? providerIsAvailable : profile?.is_available ?? true,
+          skills: skillInput.trim() || null,
+          available_days: availableDays || null,
+          available_from: availableFrom || null,
+          available_to: availableTo || null,
+          is_available: isAvailableForMatch,
+          preferred_work_type: preferredWorkType || null,
         });
 
     setSavingProfile(false);
@@ -1167,6 +1133,34 @@ export default function App() {
     setMessage(
       "💾 Profile save ho gaya!"
     );
+  };
+
+  const saveAvailability = async () => {
+    if (!user || !isProvider) return;
+
+    setSavingAvailability(true);
+    const { error } = await supabase
+      .from("profiles")
+      .update({
+        skills: skillInput.trim() || null,
+        available_days: availableDays || null,
+        available_from: availableFrom || null,
+        available_to: availableTo || null,
+        is_available: isAvailableForMatch,
+        preferred_work_type: preferredWorkType || null,
+      })
+      .eq("id", user.id);
+
+    setSavingAvailability(false);
+
+    if (error) {
+      setMessage(`❌ Availability save nahi hui: ${error.message}`);
+      return;
+    }
+
+    await loadProfile(user.id);
+    setShowSkillTimePanel(false);
+    setMessage("😎 Skill + Time JUGAAD save ho gaya! Ab matching aapke free time ke hisaab se hogi.");
   };
 
   const switchToProvider = async () => {
@@ -4942,6 +4936,86 @@ export default function App() {
             {isProvider ? (
               <section className="request-box provider-box">
 
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                    gap: 10,
+                    marginBottom: 18,
+                  }}
+                >
+                  {[
+                    ["🛠️", "Meri Skills", skillInput || "Skills add karo"],
+                    ["🕐", "Mera Free Time", `${availableFrom} - ${availableTo}`],
+                    ["📅", "Available Days", availableDays],
+                    [isAvailableForMatch ? "🟢" : "🔴", "Availability", isAvailableForMatch ? "Main available hoon" : "Abhi unavailable"],
+                    ["📍", "Service Area", profile?.service_area || profile?.preferred_address || "Location set karo"],
+                    ["💰", "Earning Match", "Skill + Time + Location"],
+                  ].map(([icon, title, sub]) => (
+                    <button
+                      key={title}
+                      type="button"
+                      onClick={() => setShowSkillTimePanel(true)}
+                      style={{
+                        textAlign: "left",
+                        border: "2px solid #111",
+                        background: "#FFD600",
+                        borderRadius: 18,
+                        padding: "13px 12px",
+                        cursor: "pointer",
+                        boxShadow: "3px 3px 0 #111",
+                      }}
+                    >
+                      <div style={{ fontSize: 25 }}>{icon}</div>
+                      <strong style={{ display: "block", marginTop: 4 }}>{title}</strong>
+                      <small style={{ display: "block", marginTop: 3, opacity: 0.78 }}>{sub}</small>
+                    </button>
+                  ))}
+                </div>
+
+                {showSkillTimePanel && (
+                  <div style={{ background: "#111", color: "#fff", borderRadius: 20, padding: 16, marginBottom: 18 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                      <div>
+                        <strong style={{ fontSize: 19 }}>😎 Apna Earning JUGAAD Set Karo</strong>
+                        <div style={{ opacity: 0.8, marginTop: 3 }}>Aapki skill + free time dekhkar JUGAAD matching karega.</div>
+                      </div>
+                      <button type="button" onClick={() => setShowSkillTimePanel(false)} style={{ border: 0, background: "#fff", borderRadius: 999, width: 34, height: 34, cursor: "pointer" }}>×</button>
+                    </div>
+
+                    <label style={{ display: "block", marginTop: 14 }}>🛠️ Aapko kya-kya aata hai?
+                      <input value={skillInput} onChange={(e) => setSkillInput(e.target.value)} placeholder="Data entry, computer, delivery..." style={{ width: "100%", marginTop: 6, padding: 12, borderRadius: 12, border: 0 }} />
+                    </label>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
+                      <label>🕐 From
+                        <input type="time" value={availableFrom} onChange={(e) => setAvailableFrom(e.target.value)} style={{ width: "100%", marginTop: 6, padding: 11, borderRadius: 12, border: 0 }} />
+                      </label>
+                      <label>🕐 To
+                        <input type="time" value={availableTo} onChange={(e) => setAvailableTo(e.target.value)} style={{ width: "100%", marginTop: 6, padding: 11, borderRadius: 12, border: 0 }} />
+                      </label>
+                    </div>
+
+                    <label style={{ display: "block", marginTop: 12 }}>📅 Available Days
+                      <select value={availableDays} onChange={(e) => setAvailableDays(e.target.value)} style={{ width: "100%", marginTop: 6, padding: 11, borderRadius: 12, border: 0 }}>
+                        <option>Today</option><option>Tomorrow</option><option>Daily</option><option>Mon-Fri</option><option>Sat-Sun</option><option>Custom</option>
+                      </select>
+                    </label>
+
+                    <label style={{ display: "block", marginTop: 12 }}>💼 Work Preference
+                      <input value={preferredWorkType} onChange={(e) => setPreferredWorkType(e.target.value)} placeholder="Part-time / Any suitable work" style={{ width: "100%", marginTop: 6, padding: 12, borderRadius: 12, border: 0 }} />
+                    </label>
+
+                    <button type="button" onClick={() => setIsAvailableForMatch(!isAvailableForMatch)} style={{ marginTop: 12, width: "100%", padding: 12, borderRadius: 12, border: 0, fontWeight: 800, cursor: "pointer" }}>
+                      {isAvailableForMatch ? "🟢 Main Available Hoon — Matching ON" : "🔴 Main Available Nahi — Matching OFF"}
+                    </button>
+
+                    <button type="button" className="primary-btn" disabled={savingAvailability} onClick={saveAvailability} style={{ width: "100%", marginTop: 12 }}>
+                      {savingAvailability ? "Saving..." : "💾 Save Skill + Time JUGAAD"}
+                    </button>
+                  </div>
+                )}
+
                 <div className="section-title">
 
                   <div>
@@ -4960,8 +5034,10 @@ export default function App() {
                   {providerRequests
                     .filter(
                       (r) =>
-                        r.provider_id === user.id ||
-                        (r.status === STATUS.pending && providerCanMatchRequest(r))
+                        r.status ===
+                          STATUS.pending ||
+                        r.provider_id ===
+                          user.id
                     )
                     .map((r) => (
                       <div
@@ -5039,6 +5115,18 @@ export default function App() {
                 </div>
               </section>
             ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, marginBottom: 14 }}>
+                {[
+                  ["🧠", "Smart Match", "Skill dekhega"],
+                  ["🕐", "Time Match", "Free time dekhega"],
+                  ["📍", "Nearby Match", "Location dekhega"],
+                ].map(([icon, title, sub]) => (
+                  <div key={title} style={{ background: "#fff", border: "2px solid #111", borderRadius: 16, padding: 10, textAlign: "center" }}>
+                    <div style={{ fontSize: 24 }}>{icon}</div><strong style={{ display: "block", fontSize: 13 }}>{title}</strong><small style={{ opacity: 0.7 }}>{sub}</small>
+                  </div>
+                ))}
+              </div>
+
               <section className="request-box">
 
                 <div className="section-title">
@@ -5151,16 +5239,6 @@ export default function App() {
                     }
                   />
                 </div>
-
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginTop: 10 }}>
-                  <select value={requiredDay} onChange={(e) => setRequiredDay(e.target.value)} style={{ padding: 12, borderRadius: 12 }}>
-                    <option value="">📅 Day (optional)</option>
-                    {['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map((day) => <option key={day} value={day}>{day}</option>)}
-                  </select>
-                  <input type="time" value={requiredFrom} onChange={(e) => setRequiredFrom(e.target.value)} style={{ padding: 12, borderRadius: 12 }} aria-label="Required from" />
-                  <input type="time" value={requiredTo} onChange={(e) => setRequiredTo(e.target.value)} style={{ padding: 12, borderRadius: 12 }} aria-label="Required to" />
-                </div>
-                <small style={{ display: "block", marginTop: 6, opacity: 0.72 }}>⏰ Kab chahiye? Time doge to JUGAAD available provider ke saath better match karega.</small>
 
                 <button
                   className="primary-btn large"
@@ -5339,8 +5417,8 @@ export default function App() {
                   {providerRequests
                     .filter(
                       (r) =>
-                        r.provider_id === user.id ||
-                        (r.status === STATUS.pending && providerCanMatchRequest(r))
+                        r.status === STATUS.pending ||
+                        r.provider_id === user.id
                     )
                     .map((r) => (
                       <div
@@ -5408,8 +5486,8 @@ export default function App() {
 
                   {providerRequests.filter(
                     (r) =>
-                      r.provider_id === user.id ||
-                      (r.status === STATUS.pending && providerCanMatchRequest(r))
+                      r.status === STATUS.pending ||
+                      r.provider_id === user.id
                   ).length === 0 && (
                     <div className="empty-state">
                       <div>🛵</div>
@@ -5603,34 +5681,6 @@ export default function App() {
                     placeholder="Aapka address"
                   />
                 </label>
-
-                {isProvider && (
-                  <div style={{ marginTop: 12, padding: 14, borderRadius: 16, background: "#fffdf0", border: "1px solid #FFD600" }}>
-                    <strong>🧠 JUGAAD Skill + Time Matching</strong>
-                    <p style={{ margin: "6px 0 12px", opacity: 0.78 }}>Apni skill aur khaali time batao. JUGAAD matching mein wahi jobs dikhayega jo tum kar sakte ho.</p>
-                    <label>
-                      Skills
-                      <input value={providerSkills} onChange={(e) => setProviderSkills(e.target.value)} placeholder="Electrician, AC Repair, Computer, Delivery..." />
-                    </label>
-                    <label style={{ marginTop: 10 }}>
-                      Available Days
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
-                        {['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map((day) => {
-                          const selected = providerAvailableDays.includes(day);
-                          return <button type="button" key={day} onClick={() => setProviderAvailableDays((days) => selected ? days.filter((d) => d !== day) : [...days, day])} style={{ padding: "7px 9px", borderRadius: 10, border: selected ? "2px solid #111" : "1px solid #ccc", background: selected ? "#FFD600" : "#fff" }}>{day.slice(0,3)}</button>;
-                        })}
-                      </div>
-                    </label>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
-                      <label>Available From<input type="time" value={providerAvailableFrom} onChange={(e) => setProviderAvailableFrom(e.target.value)} /></label>
-                      <label>Available To<input type="time" value={providerAvailableTo} onChange={(e) => setProviderAvailableTo(e.target.value)} /></label>
-                    </div>
-                    <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
-                      <input type="checkbox" checked={providerIsAvailable} onChange={(e) => setProviderIsAvailable(e.target.checked)} />
-                      🟢 Abhi JUGAAD jobs ke liye available hoon
-                    </label>
-                  </div>
-                )}
 
                 <div className="profile-role">
 
