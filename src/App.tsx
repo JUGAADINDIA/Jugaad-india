@@ -5115,7 +5115,7 @@ export default function App() {
                 </div>
               </section>
             ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, marginBottom: 14 }}>
+              <> <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, marginBottom: 14 }}>
                 {[
                   ["🧠", "Smart Match", "Skill dekhega"],
                   ["🕐", "Time Match", "Free time dekhega"],
@@ -5254,7 +5254,6 @@ export default function App() {
                     : "JUGAAD Karo →"}
                 </button>
               </section>
-            )}
 
             <section className="services-section">
 
@@ -5324,7 +5323,8 @@ export default function App() {
                 </div>
               </section>
             )}
-          </>
+              </>
+        )} </>
         )}
 
         {tab === "explore" && (
