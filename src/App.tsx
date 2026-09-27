@@ -86,6 +86,8 @@ type PaymentRow = {
   transaction_id?: string | null;
   payment_status?: string | null;
   payment_proof_url?: string | null;
+  payment_gateway?: string | null;
+  payment_order_id?: string | null;
   notes?: string | null;
   created_at?: string | null;
   paid_at?: string | null;
@@ -176,6 +178,10 @@ const paymentLabel = (status?: string | null) => {
   switch (status) {
     case "pending":
       return "⏳ Pending";
+    case "submitted":
+      return "📨 Submitted for verification";
+    case "processing":
+      return "🔄 Processing";
     case "paid":
       return "✅ Paid";
     case "failed":
@@ -276,6 +282,9 @@ export default function App() {
     useState("");
 
   const [paymentNotes, setPaymentNotes] =
+    useState("");
+
+  const [paymentProofUrl, setPaymentProofUrl] =
     useState("");
 
   const [savingPayment, setSavingPayment] =
@@ -379,6 +388,7 @@ export default function App() {
     } else {
       loadRequests();
       loadMatches();
+      loadMyPayments(user.id);
     }
   }, [user, profile, isAdmin, isProvider, tab]);
 
@@ -394,6 +404,7 @@ export default function App() {
         } else {
           loadRequests();
           loadMatches();
+          loadMyPayments(user.id);
         }
       }
     }, 15000);
@@ -594,6 +605,24 @@ export default function App() {
 
     if (error) {
       console.error("payments:", error);
+      setPayments([]);
+      return;
+    }
+
+    setPayments((data || []) as PaymentRow[]);
+  };
+
+  // Customer/provider view: only load payments connected to the signed-in user.
+  // Admin keeps using loadPayments() above for the complete control room.
+  const loadMyPayments = async (userId: string) => {
+    const { data, error } = await supabase
+      .from("payments")
+      .select("*")
+      .or(`customer_id.eq.${userId},provider_id.eq.${userId}`)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("my payments:", error);
       setPayments([]);
       return;
     }
@@ -1685,6 +1714,49 @@ export default function App() {
     await loadPayments();
   };
 
+  const openPaymentForRequest = async (requestId: string) => {
+    if (!user) return;
+
+    setPaymentRequestId(requestId);
+    setPaymentProofUrl("");
+    setPaymentTransactionId("");
+    setPaymentNotes("");
+
+    const request = requests.find((r) => r.id === requestId);
+    const match = matches
+      .filter((m) => m.request_id === requestId && m.quoted_amount != null)
+      .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))[0];
+
+    if (match?.quoted_amount != null) {
+      setPaymentAmount(String(Number(match.quoted_amount)));
+    } else {
+      const existing = payments.find((p) => p.request_id === requestId);
+      setPaymentAmount(existing?.amount != null ? String(Number(existing.amount)) : "");
+    }
+
+    const { data: existingPayment } = await supabase
+      .from("payments")
+      .select("*")
+      .eq("request_id", requestId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (existingPayment) {
+      const payment = existingPayment as PaymentRow;
+      setPaymentAmount(String(Number(payment.amount || 0)));
+      setPaymentMethod(payment.payment_method || "UPI");
+      setPaymentTransactionId(payment.transaction_id || "");
+      setPaymentProofUrl(payment.payment_proof_url || "");
+      setPaymentNotes(payment.notes || "");
+    }
+
+    if (request) {
+      setMessage("💳 Payment JUGAAD ready — amount, UTR aur proof verify karke submit karo.");
+    }
+    setPaymentFormOpen(true);
+  };
+
   const createPayment = async () => {
     if (!user || !paymentAmount.trim()) {
       setMessage(
@@ -1707,6 +1779,14 @@ export default function App() {
     }
 
     setSavingPayment(true);
+
+    const { data: existingPayment } = await supabase
+      .from("payments")
+      .select("id, payment_status")
+      .eq("request_id", paymentRequestId || "")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     const selectedRequest =
       requests.find(
@@ -1759,35 +1839,57 @@ export default function App() {
       (amount - platformFee) * 100
     ) / 100;
 
-    const { error } =
-      await supabase
+    const submitted = Boolean(
+      paymentTransactionId.trim() || paymentProofUrl.trim()
+    );
+    const paymentStatus = submitted ? "submitted" : "pending";
+
+    let error: any = null;
+
+    if (existingPayment?.id) {
+      const result = await supabase
         .from("payments")
-        .insert({
-          request_id:
-            paymentRequestId ||
-            null,
+        .update({
+          request_id: paymentRequestId || null,
           match_id: matchId,
           customer_id: customerId,
           provider_id: providerId,
           amount,
           commission_rate: JUGAAD_COMMISSION_RATE * 100,
           platform_fee: platformFee,
-          provider_amount:
-            providerAmount,
+          provider_amount: providerAmount,
+          payment_method: paymentMethod,
+          transaction_id: paymentTransactionId.trim() || null,
+          payment_proof_url: paymentProofUrl.trim() || null,
+          payment_status: paymentStatus,
+          notes: paymentNotes.trim() || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", existingPayment.id);
+      error = result.error;
+    } else {
+      const result = await supabase
+        .from("payments")
+        .insert({
+          request_id: paymentRequestId || null,
+          match_id: matchId,
+          customer_id: customerId,
+          provider_id: providerId,
+          amount,
+          commission_rate: JUGAAD_COMMISSION_RATE * 100,
+          platform_fee: platformFee,
+          provider_amount: providerAmount,
           settlement_status: "pending",
           settlement_id: null,
           provider_paid_at: null,
-          payment_method:
-            paymentMethod,
-          transaction_id:
-            paymentTransactionId.trim() ||
-            null,
-          payment_status:
-            "pending",
-          notes:
-            paymentNotes.trim() ||
-            null,
+          payment_method: paymentMethod,
+          transaction_id: paymentTransactionId.trim() || null,
+          payment_proof_url: paymentProofUrl.trim() || null,
+          payment_status: paymentStatus,
+          notes: paymentNotes.trim() || null,
         });
+      error = result.error;
+    }
 
     setSavingPayment(false);
 
@@ -1802,13 +1904,149 @@ export default function App() {
     setPaymentRequestId("");
     setPaymentAmount("");
     setPaymentTransactionId("");
+    setPaymentProofUrl("");
     setPaymentNotes("");
 
     setMessage(
-      "💳 Payment query create ho gayi."
+      submitted
+        ? "📨 Payment proof submit ho gaya — admin verification ke baad payment confirm hoga."
+        : "💳 Payment query create ho gayi — UTR/proof add karke submit kar sakte ho."
     );
 
     await loadPayments();
+  };
+
+  const loadRazorpayCheckout = async () => {
+    if ((window as any).Razorpay) return true;
+
+    await new Promise<void>((resolve, reject) => {
+      const existing = document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
+      if (existing) {
+        existing.addEventListener("load", () => resolve(), { once: true });
+        existing.addEventListener("error", () => reject(new Error("Razorpay Checkout load nahi hua.")), { once: true });
+        return;
+      }
+
+      const script = document.createElement("script");
+      script.src = "https://checkout.razorpay.com/v1/checkout.js";
+      script.async = true;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error("Razorpay Checkout load nahi hua."));
+      document.body.appendChild(script);
+    });
+
+    return Boolean((window as any).Razorpay);
+  };
+
+  const startOnlinePayment = async () => {
+    if (!user || !paymentRequestId) {
+      setMessage("💳 Pehle payment ke liye request select karo.");
+      return;
+    }
+
+    setSavingPayment(true);
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        throw new Error("Login session expire ho gaya. Dobara login karo.");
+      }
+
+      const response = await fetch("/api/razorpay/create-order", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ requestId: paymentRequestId }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.error || "Razorpay order create nahi hua.");
+      }
+
+      if (data?.alreadyPaid) {
+        setPaymentFormOpen(false);
+        setMessage("✅ Is JUGAAD ka payment pehle hi receive ho chuka hai.");
+        await loadMyPayments(user.id);
+        return;
+      }
+
+      const checkoutReady = await loadRazorpayCheckout();
+      if (!checkoutReady) throw new Error("Razorpay Checkout available nahi hai.");
+
+      const Razorpay = (window as any).Razorpay;
+      const options = {
+        key: data.keyId,
+        amount: data.amount,
+        currency: data.currency || "INR",
+        name: "JUGAAD INDIA",
+        description: "JUGAAD service payment",
+        order_id: data.orderId,
+        prefill: data.customer || {},
+        notes: {
+          request_id: paymentRequestId,
+        },
+        theme: {
+          color: "#FFD600",
+        },
+        modal: {
+          ondismiss: () => {
+            setSavingPayment(false);
+            setMessage("🙂 Payment window band ho gayi. Jab mann kare, JUGAAD se dobara pay kar dena.");
+          },
+        },
+        handler: async (paymentResponse: any) => {
+          try {
+            const verifyResponse = await fetch("/api/razorpay/verify-payment", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${session.access_token}`,
+              },
+              body: JSON.stringify(paymentResponse),
+            });
+
+            const verifyData = await verifyResponse.json().catch(() => ({}));
+            if (!verifyResponse.ok) {
+              throw new Error(verifyData?.error || "Payment verification fail ho gayi.");
+            }
+
+            setPaymentFormOpen(false);
+            setPaymentRequestId("");
+            setPaymentAmount("");
+            setPaymentTransactionId("");
+            setPaymentProofUrl("");
+            setPaymentNotes("");
+            setMessage(
+              verifyData?.status === "paid"
+                ? "🎉 Payment successful! JUGAAD ne payment verify kar liya. Provider settlement ab pending hai."
+                : "⏳ Payment receive hua hai; final gateway confirmation ka wait ho raha hai."
+            );
+            await loadMyPayments(user.id);
+          } catch (error: any) {
+            setMessage(`❌ Payment verify nahi hua: ${error?.message || "Unknown error"}`);
+          } finally {
+            setSavingPayment(false);
+          }
+        },
+      };
+
+      const checkout = new Razorpay(options);
+      checkout.on("payment.failed", (failure: any) => {
+        setSavingPayment(false);
+        const reason = failure?.error?.description || "Payment fail ho gaya.";
+        setMessage(`❌ ${reason} — JUGAAD ne order ko failed track kar diya hai.`);
+      });
+      checkout.open();
+    } catch (error: any) {
+      setSavingPayment(false);
+      setMessage(`❌ Online payment start nahi hua: ${error?.message || "Unknown error"}`);
+    }
   };
 
   /* ---------------- MAPS / STATS ---------------- */
@@ -3691,6 +3929,10 @@ export default function App() {
                         Pending
                       </option>
 
+                      <option value="submitted">
+                        Submitted
+                      </option>
+
                       <option value="paid">
                         Paid
                       </option>
@@ -3945,8 +4187,8 @@ export default function App() {
                                     👁
                                   </button>
 
-                                  {p.payment_status ===
-                                    "pending" && (
+                                  {(p.payment_status === "pending" ||
+                                    p.payment_status === "submitted") && (
                                     <>
                                       <button
                                         onClick={(e) => {
@@ -4724,8 +4966,8 @@ export default function App() {
 
               <div className="card-actions">
 
-                {selectedPayment.payment_status ===
-                  "pending" && (
+                {(selectedPayment.payment_status === "pending" ||
+                  selectedPayment.payment_status === "submitted") && (
                   <>
                     <button
                       onClick={() => {
@@ -4819,22 +5061,20 @@ export default function App() {
 
               <button
                 className="modal-close"
-                onClick={() =>
-                  setPaymentFormOpen(
-                    false
-                  )
-                }
+                onClick={() => {
+                  setPaymentFormOpen(false);
+                  setPaymentProofUrl("");
+                }}
               >
                 ×
               </button>
 
               <h2>
-                💳 New Payment Query
+                💳 JUGAAD Payment Center
               </h2>
 
               <p>
-                Payment details transparent
-                tareeke se add karo.
+                Approved provider quote → secure Razorpay payment → signed webhook verification → 10% JUGAAD charge → provider settlement. Manual UTR/proof option bhi available hai.
               </p>
 
               <label>
@@ -4852,7 +5092,10 @@ export default function App() {
                     Select request
                   </option>
 
-                  {requests.map((r) => (
+                  {requests
+                    .filter((r) => isAdmin || r.user_id === user?.id)
+                    .filter((r) => r.status === STATUS.completed || isAdmin)
+                    .map((r) => (
                     <option
                       key={r.id}
                       value={r.id}
@@ -4928,6 +5171,20 @@ export default function App() {
               </label>
 
               <label>
+                Payment Proof URL (optional)
+
+                <input
+                  value={paymentProofUrl}
+                  onChange={(e) => setPaymentProofUrl(e.target.value)}
+                  placeholder="Supabase/storage ya image link"
+                  inputMode="url"
+                />
+                <small style={{ display: "block", marginTop: 5, opacity: 0.7 }}>
+                  UTR ke saath proof link doge to verification easy rahegi.
+                </small>
+              </label>
+
+              <label>
                 Notes
 
                 <textarea
@@ -4996,6 +5253,31 @@ export default function App() {
                   </strong>
                 </div>
               </div>
+
+              <div style={{ marginTop: 12, padding: 12, borderRadius: 14, border: "1px dashed #111", background: "#fffdf0" }}>
+                <strong>🔐 Payment safety flow</strong>
+                <div style={{ marginTop: 6, fontSize: 13, lineHeight: 1.5 }}>
+                  Online: Order → Razorpay → Webhook Verify → ✅ Paid → 💸 Provider Settlement
+                  <br />
+                  Manual: UTR/Proof → Admin Verify → ✅ Paid → 💸 Provider Settlement
+                </div>
+                <small style={{ display: "block", marginTop: 5, opacity: 0.72 }}>
+                  Online payment ka final status server-side Razorpay verification + signed webhook se update hoga. Manual UTR/proof payment mein admin verification rahega.
+                </small>
+              </div>
+
+              {!isAdmin && (
+                <button
+                  className="primary-btn"
+                  disabled={savingPayment || !paymentRequestId}
+                  onClick={startOnlinePayment}
+                  style={{ marginBottom: 10 }}
+                >
+                  {savingPayment
+                    ? "Payment open ho raha hai..."
+                    : "⚡ Pay Online — UPI / Card / Netbanking"}
+                </button>
+              )}
 
               <button
                 className="primary-btn"
@@ -5819,6 +6101,28 @@ export default function App() {
                           );
                         })}
 
+                        {r.status === STATUS.completed && (() => {
+                          const requestPayment = payments.find((p) => p.request_id === r.id);
+                          return (
+                            <div style={{ marginTop: 12, padding: 12, borderRadius: 14, border: "2px solid #111", background: "#fffdf0" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                                <div>
+                                  <small style={{ display: "block", opacity: 0.7 }}>💳 PAYMENT</small>
+                                  <strong>{requestPayment ? paymentLabel(requestPayment.payment_status) : "💰 Payment ready"}</strong>
+                                </div>
+                                {requestPayment && (
+                                  <strong>₹{Number(requestPayment.amount || 0).toLocaleString("en-IN")}</strong>
+                                )}
+                              </div>
+                              <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
+                                {requestPayment
+                                  ? `JUGAAD 10%: ₹${Number(requestPayment.platform_fee || 0).toLocaleString("en-IN")} • Provider: ₹${Number(requestPayment.provider_amount || 0).toLocaleString("en-IN")}`
+                                  : "Provider ka approved quote payment amount banega."}
+                              </div>
+                            </div>
+                          );
+                        })()}
+
                         <div className="request-card-bottom">
                           <small>
                             {formatDate(r.created_at || r.create_at)}
@@ -5847,6 +6151,15 @@ export default function App() {
                               }
                             >
                               ✅ Kaam Complete
+                            </button>
+                          )}
+
+                          {r.status === STATUS.completed && (
+                            <button
+                              className="primary-small-btn"
+                              onClick={() => void openPaymentForRequest(r.id)}
+                            >
+                              💳 {payments.some((p) => p.request_id === r.id) ? "Payment Details" : "Pay / Submit Proof"}
                             </button>
                           )}
                         </div>
