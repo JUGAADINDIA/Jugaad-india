@@ -5413,10 +5413,9 @@ export default function App() {
                   )}
                 </div>
 
-                <div className="jugaad-feature-panel" style={{ marginTop: 14, padding: 14, borderRadius: 18, border: "2px dashed #111" }}>
+                <div className="jugaad-feature-panel" style={{ marginTop: 14, padding: 14, borderRadius: 18, border: "2px dashed #111", width: "100%", maxWidth: "100%", boxSizing: "border-box", overflow: "hidden" }}>
                   <strong>🚀 JUGAAD Super Powers</strong>
-                  <p style={{ margin: "5px 0 10px", opacity: 0.78 }}>Problem simple ho ya “bhai iska bhi jugaad hai?” — mode choose karo.</p>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10, width: "100%" }}>
                     <button type="button" className={jugaadMode ? "primary-small-btn" : "outline-btn"} onClick={() => { setJugaadMode(!jugaadMode); window.setTimeout(persistJugaadModes, 0); }}>🧠 JUGAAD Mode</button>
                     <button type="button" className={jugaadBackup ? "primary-small-btn" : "outline-btn"} onClick={() => { setJugaadBackup(!jugaadBackup); window.setTimeout(persistJugaadModes, 0); }}>🛟 Backup {jugaadBackup ? "ON" : "OFF"}</button>
                     <button type="button" className="outline-btn" onClick={() => activateJugaadFeature("chain")}>🔗 Chain</button>
@@ -5425,33 +5424,14 @@ export default function App() {
                     <button type="button" className="outline-btn" onClick={() => activateJugaadFeature("memory")}>🧠 Memory</button>
                     <button type="button" className="outline-btn" onClick={() => activateJugaadFeature("emergency")}>🚨 Emergency</button>
                   </div>
-                  {jugaadChain.length > 0 && <div style={{ marginTop: 9 }}>🔗 Chain: {jugaadChain.join(" → ")} <button type="button" className="text-btn" onClick={() => setJugaadChain([])}>Clear</button></div>}
-                  {(impossibleJugaad || jugaadTogether || jugaadMemory || emergencyJugaad) && <div style={{ marginTop: 8, fontWeight: 700 }}>✨ {impossibleJugaad ? "Custom JUGAAD ready" : jugaadTogether ? "Nearby similar requests ko group karne ka mode ready" : jugaadMemory ? "Previous JUGAAD context ready" : "Urgent matching mode ready"}</div>}
-                  {jugaadMode && <small style={{ display: "block", marginTop: 8 }}>🤖 Category select karna optional — AI need se right JUGAAD decide karega.</small>}
-                  <div style={{ marginTop: 10, display: "flex", gap: 7, flexWrap: "wrap" }}>
+                  {jugaadChain.length > 0 && <div style={{ marginTop: 9 }}>🔗 {jugaadChain.join(" → ")} <button type="button" className="text-btn" onClick={() => setJugaadChain([])}>Clear</button></div>}
+                  {(impossibleJugaad || jugaadTogether || jugaadMemory || emergencyJugaad) && <div style={{ marginTop: 8, fontWeight: 700 }}>✨ JUGAAD mode ready</div>}
+                  <div style={{ marginTop: 10, display: "flex", gap: 7, flexWrap: "wrap", width: "100%" }}>
                     {services.slice(0, 6).map((service) => (
                       <button key={service.name} type="button" className={jugaadChain.includes(service.name) ? "primary-small-btn" : "outline-btn"} onClick={() => toggleJugaadChain(service.name)}>
                         {service.icon} {service.name}
                       </button>
                     ))}
-                  </div>
-                  <small style={{ display: "block", marginTop: 8 }}>🔗 Multiple kaam ho to providers ko sequence mein connect kiya ja sakta hai.</small>
-                  {jugaadBackup && <small style={{ display: "block", marginTop: 4 }}>🛟 Provider cancel kare to backup/rematch option ready rahega.</small>}
-                  {emergencyJugaad && <small style={{ display: "block", marginTop: 4 }}>🚨 Emergency mode: urgent request ko priority signal diya gaya hai.</small>}
-                  {jugaadMemory && <small style={{ display: "block", marginTop: 4 }}>🧠 Memory mode: repeat JUGAAD ke liye previous context use karne ka signal ready hai.</small>}
-                  <small style={{ display: "block", marginTop: 6, fontWeight: 700 }}>😎 Ek problem, multiple raaste — JUGAAD rukega nahi.</small>
-                  <small style={{ display: "block", marginTop: 3 }}>🇮🇳 Phase 1 + Phase 2 controls isi request flow ke andar rakhe gaye hain.</small>
-                  <div style={{ marginTop: 12, padding: 12, borderRadius: 14, background: "#fff", color: "#111" }}>
-                    <strong>🛠️ Active JUGAAD Plan</strong>
-                    <div style={{ marginTop: 6, display: "grid", gap: 5 }}>
-                      <span>{jugaadMode ? "🧠 Mode: AI khud right service/skill decide karega" : "📝 Mode: normal request"}</span>
-                      <span>{jugaadChain.length ? `🔗 Chain: ${jugaadChain.join(" → ")}` : "🔗 Chain: single provider flow"}</span>
-                      <span>{jugaadBackup ? "🛟 Backup: provider cancel hone par rematch" : "🛟 Backup: off"}</span>
-                      <span>{impossibleJugaad ? "🧩 Impossible: custom legitimate requirement" : "🧩 Impossible: off"}</span>
-                      <span>{jugaadTogether ? "👥 Together: similar nearby requests grouping signal" : "👥 Together: off"}</span>
-                      <span>{jugaadMemory ? "🧠 Memory: repeat JUGAAD context signal" : "🧠 Memory: off"}</span>
-                      <span>{emergencyJugaad ? "🚨 Emergency: urgent matching signal" : "🚨 Emergency: off"}</span>
-                    </div>
                   </div>
                 </div>
 
