@@ -281,6 +281,12 @@ export default function App() {
   const [savingPayment, setSavingPayment] =
     useState(false);
 
+  // One-time real-world quote approval flow
+  const [quoteRequestId, setQuoteRequestId] = useState("");
+  const [quoteMatchId, setQuoteMatchId] = useState("");
+  const [quoteAmount, setQuoteAmount] = useState("");
+  const [savingQuote, setSavingQuote] = useState(false);
+
   const role = String(profile?.role || "customer").toLowerCase();
 
   const isAdmin =
@@ -794,32 +800,49 @@ export default function App() {
       setCategory(result.category || "Sab");
 
       const locationValue = location.trim() || profile?.preferred_address || "";
-      const autoRequest = Number(result.confidence || 0) >= 0.65;
-
-      if (autoRequest) {
-        const created = await createRequestFromValues(result.need || need, result.category || "Sab", locationValue);
-        if (created) {
-          setNeed("");
-          setLocation("");
-          setRequiredDay("");
-          setRequiredFrom("");
-          setRequiredTo("");
-          setAiPhoto(null);
-          setVoiceBlob(null);
-          setAiPhotoPreview("");
-          setTab("requests");
-          setMessage(`🧠 Samajh gaya: ${result.suggested_service || result.category}. Request automatically bhej di — ab provider dhoondh rahe hain. 😎`);
-          await loadRequests();
-        }
-      } else {
-        setMessage("🧠 JUGAAD ko idea mil gaya, par confidence kam hai. Neeche check karke JUGAAD Karo.");
-      }
+      // AI must understand first; the customer gives the final confirmation.
+      // This prevents an incorrect AI interpretation from creating a real request automatically.
+      setMessage(
+        Number(result.confidence || 0) >= 0.65
+          ? "🧠 Samajh gaya! Neeche JUGAAD ki samajh check karo — sahi hai to ‘Haan, yahi mera kaam hai’ dabao. 😎"
+          : "🧠 JUGAAD ko idea mil gaya, par confidence kam hai. Neeche check/edit karke phir confirm karo."
+      );
+      void locationValue;
     } catch (error) {
       console.error("AI JUGAAD:", error);
       setMessage(`❌ AI samajh nahi paaya: ${error instanceof Error ? error.message : "Try again"}`);
     } finally {
       setAiAnalyzing(false);
     }
+  };
+
+  const confirmAiRequest = async () => {
+    if (!user || isProvider || isAdmin || !aiResult) return;
+
+    const finalNeed = (need || aiResult.need || "").trim();
+    const finalCategory = aiResult.category || category || "Sab";
+    const finalLocation = location.trim() || profile?.preferred_address || "";
+
+    if (!finalNeed) {
+      setMessage("✍️ Pehle requirement batao — phir JUGAAD seedha kaam par lagega.");
+      return;
+    }
+
+    const created = await createRequestFromValues(finalNeed, finalCategory, finalLocation);
+    if (!created) return;
+
+    setNeed("");
+    setLocation("");
+    setRequiredDay("");
+    setRequiredFrom("");
+    setRequiredTo("");
+    setAiPhoto(null);
+    setVoiceBlob(null);
+    setAiPhotoPreview("");
+    setAiResult(null);
+    setTab("requests");
+    setMessage(`🧠✅ Customer ne confirm kiya! ${aiResult.suggested_service || finalCategory} ka JUGAAD ab provider dhoondh raha hai 😎`);
+    await loadRequests();
   };
 
   const startVoiceRecording = async () => {
@@ -1175,99 +1198,175 @@ export default function App() {
     return true;
   };
 
-  const acceptRequest = async (
-    requestId: string
-  ) => {
+  const acceptRequest = async (requestId: string) => {
     if (!user || !isProvider) return;
 
-    const { data: existing } =
-      await supabase
-        .from("matches")
-        .select("id")
-        .eq("request_id", requestId)
-        .eq("provider_id", user.id)
-        .maybeSingle();
+    setQuoteRequestId(requestId);
+    setQuoteAmount("");
+    setQuoteMatchId("");
+    setMessage("💰 Kaam pakadne se pehle apna fair quote batao — customer approve karega, phir kaam start hoga.");
+  };
 
-    if (!existing) {
-      const { error } =
-        await supabase
-          .from("matches")
-          .insert({
-            request_id: requestId,
-            provider_id: user.id,
-            worker_id: user.id,
-            status: "accepted",
-            matches_status: "accepted",
-          });
-
-      if (error) {
-        setMessage(
-          `❌ Match create nahi hua: ${error.message}`
-        );
-        return;
-      }
-    }
-
-    const { error } =
-      await supabase
-        .from("requests")
-        .update({
-          status: STATUS.accepted,
-          provider_id: user.id,
-        })
-        .eq("id", requestId);
-
-    if (error) {
-      setMessage(
-        `❌ Request update nahi hui: ${error.message}`
-      );
+  const submitProviderQuote = async () => {
+    if (!user || !isProvider || !quoteRequestId) return;
+    const amount = Number(quoteAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setMessage("💰 Valid quote amount daalo.");
       return;
     }
 
-    setMessage(
-      "🔥 Kaam pakad liya! Customer ko bata diya."
-    );
+    setSavingQuote(true);
+    try {
+      let matchId = quoteMatchId;
+      if (!matchId) {
+        const { data: existing } = await supabase
+          .from("matches")
+          .select("id")
+          .eq("request_id", quoteRequestId)
+          .eq("provider_id", user.id)
+          .maybeSingle();
+        matchId = existing?.id || "";
+      }
 
+      if (matchId) {
+        const { error } = await supabase
+          .from("matches")
+          .update({
+            quoted_amount: amount,
+            status: "quote_pending",
+            matches_status: "quote_pending",
+          })
+          .eq("id", matchId)
+          .eq("provider_id", user.id);
+        if (error) throw error;
+      } else {
+        const { data, error } = await supabase
+          .from("matches")
+          .insert({
+            request_id: quoteRequestId,
+            provider_id: user.id,
+            worker_id: user.id,
+            quoted_amount: amount,
+            status: "quote_pending",
+            matches_status: "quote_pending",
+          })
+          .select("id")
+          .single();
+        if (error) throw error;
+        matchId = data?.id || "";
+      }
+
+      setQuoteRequestId("");
+      setQuoteMatchId("");
+      setQuoteAmount("");
+      setMessage(`💰 ₹${amount.toLocaleString("en-IN")} ka quote customer ko bhej diya. Ab approval ka JUGAAD! 😎`);
+      await loadMatches();
+      await loadRequests();
+      if (user) await loadNotifications(user.id);
+    } catch (error) {
+      setMessage(`❌ Quote save nahi hua: ${error instanceof Error ? error.message : "Try again"}`);
+    } finally {
+      setSavingQuote(false);
+    }
+  };
+
+  const approveProviderQuote = async (requestId: string, matchId: string) => {
+    if (!user || isProvider || isAdmin) return;
+    const request = requests.find((r) => r.id === requestId);
+    if (!request || request.user_id !== user.id) {
+      setMessage("❌ Ye request aapki nahi hai.");
+      return;
+    }
+
+    const match = matches.find((m) => m.id === matchId && m.request_id === requestId);
+    const providerId = match?.provider_id || match?.worker_id;
+    if (!match || !providerId || !match.quoted_amount) {
+      setMessage("❌ Quote details nahi mili.");
+      return;
+    }
+
+    const { error: matchError } = await supabase
+      .from("matches")
+      .update({ status: "accepted", matches_status: "accepted" })
+      .eq("id", matchId)
+      .eq("request_id", requestId);
+    if (matchError) {
+      setMessage(`❌ Quote approve nahi hua: ${matchError.message}`);
+      return;
+    }
+
+    const { error: requestError } = await supabase
+      .from("requests")
+      .update({ status: STATUS.accepted, provider_id: providerId })
+      .eq("id", requestId)
+      .eq("user_id", user.id);
+    if (requestError) {
+      setMessage(`❌ Provider assign nahi hua: ${requestError.message}`);
+      return;
+    }
+
+    setMessage(`🤝 Quote ₹${Number(match.quoted_amount).toLocaleString("en-IN")} approve! Ab provider kaam start kar sakta hai. 😎`);
     await loadRequests();
     await loadMatches();
     await loadNotifications(user.id);
   };
 
-  const updateRequestStatus = async (
-    requestId: string,
-    status: string
-  ) => {
+  const updateRequestStatus = async (requestId: string, status: string) => {
+    if (!user) return;
+    const request = requests.find((r) => r.id === requestId);
+    if (!request) {
+      setMessage("❌ Request nahi mili.");
+      return;
+    }
+
+    const current = request.status || STATUS.pending;
+    const isOwner = request.user_id === user.id;
+    const isAssignedProvider = isProvider && request.provider_id === user.id;
+    const allowedTransitions: Record<string, string[]> = {
+      [STATUS.pending]: [STATUS.cancelled],
+      [STATUS.accepted]: [STATUS.in_progress, STATUS.cancelled],
+      [STATUS.in_progress]: [STATUS.completed, STATUS.cancelled],
+      [STATUS.completed]: [],
+      [STATUS.cancelled]: [],
+    };
+
+    if (!isAdmin && !isOwner && !isAssignedProvider) {
+      setMessage("🔐 Ye JUGAAD kisi aur ka hai.");
+      return;
+    }
+    if (!isAdmin && !allowedTransitions[current]?.includes(status)) {
+      setMessage(`🔐 ${statusLabel(current)} se ${statusLabel(status)} direct nahi ja sakta.`);
+      return;
+    }
+    if (!isAdmin && status !== STATUS.cancelled && !isAssignedProvider) {
+      setMessage("🧰 Kaam start/complete provider hi karega.");
+      return;
+    }
+
     const { error } = await supabase
       .from("requests")
       .update({ status })
       .eq("id", requestId);
 
     if (error) {
-      setMessage(
-        `❌ Status update nahi hua: ${error.message}`
-      );
+      setMessage(`❌ Status update nahi hua: ${error.message}`);
       return;
     }
 
     setMessage(
       status === STATUS.completed
-        ? "🎉 Kaam complete mark ho gaya!"
+        ? "🎉 Provider ne kaam complete mark kar diya! Ab payment JUGAAD ready hai."
         : status === STATUS.cancelled && jugaadBackup
         ? "🛟 Provider cancel hua — Backup JUGAAD activate ho raha hai!"
         : `✅ Status: ${statusLabel(status)}`
     );
 
     await loadRequests();
-
+    await loadMatches();
     if (status === STATUS.cancelled && jugaadBackup && !isAdmin) {
-      window.setTimeout(() => {
-        void rematchWithBackup(requestId);
-      }, 250);
+      window.setTimeout(() => void rematchWithBackup(requestId), 250);
     }
-
-    if (isAdmin) {
-      await loadAdminData();
-    }
+    if (isAdmin) await loadAdminData();
   };
 
   const saveProfile = async () => {
@@ -4696,6 +4795,23 @@ export default function App() {
 
         {/* ================= NEW PAYMENT ================= */}
 
+        {quoteRequestId && (
+          <div className="modal-backdrop">
+            <div className="payment-modal">
+              <button className="modal-close" onClick={() => { setQuoteRequestId(""); setQuoteMatchId(""); setQuoteAmount(""); }}>×</button>
+              <h2>💰 Provider Quote</h2>
+              <p>Customer ko final service amount pehle dikhega. Approval ke baad hi kaam start hoga.</p>
+              <label>Quote Amount ₹<input type="number" min="1" value={quoteAmount} onChange={(e) => setQuoteAmount(e.target.value)} placeholder="500" autoFocus /></label>
+              <div className="payment-summary">
+                <div><small>Customer pays</small><strong>₹{Number(quoteAmount || 0).toLocaleString("en-IN")}</strong></div>
+                <div><small>JUGAAD application/service charge (10%)</small><strong>₹{(Number(quoteAmount || 0) * JUGAAD_COMMISSION_RATE).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</strong></div>
+                <div><small>Provider share</small><strong>₹{(Number(quoteAmount || 0) * (1 - JUGAAD_COMMISSION_RATE)).toLocaleString("en-IN", { maximumFractionDigits: 2 })}</strong></div>
+              </div>
+              <button className="primary-btn" disabled={savingQuote} onClick={submitProviderQuote}>{savingQuote ? "Quote bhej rahe hain..." : "💰 Quote Customer ko bhejo"}</button>
+            </div>
+          </div>
+        )}
+
         {paymentFormOpen && (
           <div className="modal-backdrop">
 
@@ -5141,13 +5257,9 @@ export default function App() {
                           ) : (
                             <button
                               className="primary-small-btn"
-                              onClick={() =>
-                                acceptRequest(
-                                  r.id
-                                )
-                              }
+                              onClick={() => acceptRequest(r.id)}
                             >
-                              🔥 Kaam Pakdo
+                              💰 Quote do / Kaam pakdo
                             </button>
                           )}
                         </div>
@@ -5289,6 +5401,14 @@ export default function App() {
                       {aiResult.solution && <div style={{ marginTop: 8, fontWeight: 800 }}>💡 JUGAAD Solution: {aiResult.solution}</div>}
                       {aiResult.next_step && <div style={{ marginTop: 5 }}>👉 Next step: {aiResult.next_step}</div>}
                       {aiResult.safety_note && <div style={{ marginTop: 5 }}>⚠️ {aiResult.safety_note}</div>}
+                      <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button type="button" className="primary-btn" onClick={confirmAiRequest}>
+                          ✅ Haan, yahi mera kaam hai — JUGAAD Karo
+                        </button>
+                        <button type="button" className="outline-btn" onClick={() => setMessage("✍️ Neeche requirement edit karo, phir dobara AI se JUGAAD chalao.")}>
+                          ✏️ Edit karke check karo
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -5598,7 +5718,7 @@ export default function App() {
                             <button
                               onClick={() => acceptRequest(r.id)}
                             >
-                              🔥 Kaam Pakdo
+                              💰 Quote do / Kaam pakdo
                             </button>
                           )}
 
@@ -5704,6 +5824,20 @@ export default function App() {
                             </div>
                           </div>
                         )}
+
+                        {matches.filter((m) => m.request_id === r.id && m.status === "quote_pending" && m.quoted_amount).map((quote) => {
+                          const quoteProviderId = quote.provider_id || quote.worker_id;
+                          const quoteProvider = quoteProviderId ? users.find((u) => u.id === quoteProviderId) : null;
+                          return (
+                            <div key={quote.id} style={{ marginTop: 12, padding: 12, borderRadius: 14, background: "#fff7bf", border: "2px solid #111" }}>
+                              <strong>💰 Provider quote</strong>
+                              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 6 }}>
+                                <span>{quoteProvider?.full_name || "JUGAAD Provider"} — <strong>₹{Number(quote.quoted_amount).toLocaleString("en-IN")}</strong></span>
+                                <button className="primary-small-btn" onClick={() => approveProviderQuote(r.id, quote.id)}>🤝 Quote approve karo</button>
+                              </div>
+                            </div>
+                          );
+                        })}
 
                         <div className="request-card-bottom">
                           <small>
