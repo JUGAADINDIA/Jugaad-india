@@ -1,194 +1,629 @@
-const crypto = require('crypto');
-const {
-  getAuthenticatedUser,
-  supabaseJson,
-  SUPABASE_SERVICE_ROLE_KEY,
-  RAZORPAY_KEY_SECRET
-} = require('./_helpers');
+import type {
+  VercelRequest,
+  VercelResponse,
+} from "@vercel/node";
 
-module.exports = async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({
-      error: 'Method not allowed'
+import crypto from "crypto";
+import { createClient } from "@supabase/supabase-js";
+
+const SUPABASE_URL =
+  process.env.VITE_SUPABASE_URL;
+
+const SUPABASE_SERVICE_ROLE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+const RAZORPAY_KEY_ID =
+  process.env.RAZORPAY_KEY_ID;
+
+const RAZORPAY_KEY_SECRET =
+  process.env.RAZORPAY_KEY_SECRET;
+
+const RAZORPAY_API =
+  "https://api.razorpay.com/v1";
+
+function send(
+  res: VercelResponse,
+  status: number,
+  body: unknown
+) {
+  return res.status(status).json(body);
+}
+
+function getBearerToken(
+  req: VercelRequest
+) {
+  const authorization =
+    req.headers.authorization || "";
+
+  if (
+    !authorization
+      .toLowerCase()
+      .startsWith("bearer ")
+  ) {
+    return "";
+  }
+
+  return authorization
+    .slice(7)
+    .trim();
+}
+
+function razorpayAuth() {
+  return Buffer.from(
+    `${RAZORPAY_KEY_ID}:${RAZORPAY_KEY_SECRET}`
+  ).toString("base64");
+}
+
+/*
+ * 🔐 Timing-safe signature comparison
+ */
+function safeCompare(
+  expected: string,
+  received: string
+) {
+  const expectedBuffer =
+    Buffer.from(expected, "utf8");
+
+  const receivedBuffer =
+    Buffer.from(received, "utf8");
+
+  if (
+    expectedBuffer.length !==
+    receivedBuffer.length
+  ) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(
+    expectedBuffer,
+    receivedBuffer
+  );
+}
+
+export default async function handler(
+  req: VercelRequest,
+  res: VercelResponse
+) {
+  if (req.method !== "POST") {
+    return send(res, 405, {
+      error: "Method not allowed",
     });
   }
 
-  try {
-    if (!RAZORPAY_KEY_SECRET) {
-      throw new Error('RAZORPAY_KEY_SECRET is not configured');
-    }
+  /*
+   * ⚙️ Server configuration
+   */
+  if (
+    !SUPABASE_URL ||
+    !SUPABASE_SERVICE_ROLE_KEY
+  ) {
+    return send(res, 500, {
+      error:
+        "Supabase server configuration missing",
+    });
+  }
 
-    if (!SUPABASE_SERVICE_ROLE_KEY) {
-      throw new Error('SUPABASE_SERVICE_ROLE_KEY is not configured');
-    }
+  if (
+    !RAZORPAY_KEY_ID ||
+    !RAZORPAY_KEY_SECRET
+  ) {
+    return send(res, 500, {
+      error:
+        "Razorpay server configuration missing",
+    });
+  }
 
-    const user = await getAuthenticatedUser(req);
+  /*
+   * 🔑 Login token
+   */
+  const token =
+    getBearerToken(req);
 
-    const body =
-      typeof req.body === 'string'
-        ? JSON.parse(req.body)
-        : (req.body || {});
+  if (!token) {
+    return send(res, 401, {
+      error:
+        "Authorization token required",
+    });
+  }
 
-    const {
-      razorpay_order_id,
-      razorpay_payment_id,
-      razorpay_signature,
-      paymentId
-    } = body;
-
-    if (
-      !razorpay_order_id ||
-      !razorpay_payment_id ||
-      !razorpay_signature
-    ) {
-      return res.status(400).json({
-        error: 'Razorpay payment details are incomplete.'
-      });
-    }
-
-    /*
-     * Razorpay signature verification
-     *
-     * Signature =
-     * HMAC_SHA256(
-     *   razorpay_order_id + "|" + razorpay_payment_id,
-     *   RAZORPAY_KEY_SECRET
-     * )
-     */
-
-    const generatedSignature = crypto
-      .createHmac('sha256', RAZORPAY_KEY_SECRET)
-      .update(
-        `${razorpay_order_id}|${razorpay_payment_id}`
-      )
-      .digest('hex');
-
-    const receivedBuffer =
-      Buffer.from(razorpay_signature, 'utf8');
-
-    const generatedBuffer =
-      Buffer.from(generatedSignature, 'utf8');
-
-    if (
-      receivedBuffer.length !== generatedBuffer.length ||
-      !crypto.timingSafeEqual(
-        receivedBuffer,
-        generatedBuffer
-      )
-    ) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid Razorpay payment signature.'
-      });
-    }
-
-    /*
-     * Find the payment record.
-     * We verify customer ownership so another user
-     * cannot update someone else's payment.
-     */
-
-    let paymentRows = [];
-
-    if (paymentId) {
-      paymentRows = await supabaseJson(
-        `payments?select=*&id=eq.${encodeURIComponent(
-          paymentId
-        )}&customer_id=eq.${encodeURIComponent(
-          user.id
-        )}&limit=1`,
-        {
-          token: SUPABASE_SERVICE_ROLE_KEY
-        }
-      );
-    }
-
-    if (!paymentRows?.length) {
-      paymentRows = await supabaseJson(
-        `payments?select=*&payment_order_id=eq.${encodeURIComponent(
-          razorpay_order_id
-        )}&customer_id=eq.${encodeURIComponent(
-          user.id
-        )}&limit=1`,
-        {
-          token: SUPABASE_SERVICE_ROLE_KEY
-        }
-      );
-    }
-
-    const payment = paymentRows?.[0];
-
-    if (!payment) {
-      return res.status(404).json({
-        error: 'JUGAAD payment record not found.'
-      });
-    }
-
-    /*
-     * Prevent accidental double-processing.
-     */
-
-    if (
-      payment.payment_status === 'paid' &&
-      payment.gateway_payment_id === razorpay_payment_id
-    ) {
-      return res.status(200).json({
-        success: true,
-        alreadyPaid: true,
-        message: 'Payment already verified.'
-      });
-    }
-
-    /*
-     * Make sure the Razorpay order belongs to
-     * the payment record we are updating.
-     */
-
-    if (
-      String(payment.payment_order_id) !==
-      String(razorpay_order_id)
-    ) {
-      return res.status(400).json({
-        error: 'Razorpay order does not match JUGAAD payment.'
-      });
-    }
-
-    const updatedRows = await supabaseJson(
-      `payments?id=eq.${encodeURIComponent(payment.id)}&customer_id=eq.${encodeURIComponent(user.id)}`,
+  const supabaseAdmin =
+    createClient(
+      SUPABASE_URL,
+      SUPABASE_SERVICE_ROLE_KEY,
       {
-        method: 'PATCH',
-        token: SUPABASE_SERVICE_ROLE_KEY,
-        headers: {
-          Prefer: 'return=representation'
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false,
         },
-        body: JSON.stringify({
-          payment_status: 'paid',
-          gateway_payment_id: razorpay_payment_id,
-          gateway_signature: razorpay_signature,
-          transaction_id: razorpay_payment_id,
-          paid_at: new Date().toISOString(),
-          notes:
-            'Razorpay payment verified successfully by JUGAAD.'
-        })
       }
     );
 
-    return res.status(200).json({
+  try {
+    /*
+     * 👤 Verify logged-in user
+     */
+    const {
+      data: authData,
+      error: authError,
+    } =
+      await supabaseAdmin.auth.getUser(
+        token
+      );
+
+    if (
+      authError ||
+      !authData?.user
+    ) {
+      return send(res, 401, {
+        error:
+          "Invalid login session",
+      });
+    }
+
+    const customerId =
+      authData.user.id;
+
+    /*
+     * 💳 Razorpay checkout response
+     */
+    const {
+      razorpay_payment_id:
+        paymentId,
+
+      razorpay_order_id:
+        orderId,
+
+      razorpay_signature:
+        signature,
+    } = req.body || {};
+
+    if (
+      !paymentId ||
+      !orderId ||
+      !signature
+    ) {
+      return send(res, 400, {
+        error:
+          "Razorpay payment details incomplete",
+      });
+    }
+
+    /*
+     * 🔒 Payment record database se
+     * trusted order ID ke through nikalo.
+     *
+     * Browser se aaye order ID ko
+     * blindly trust nahi kar rahe.
+     */
+    const {
+      data: payment,
+      error: paymentError,
+    } =
+      await supabaseAdmin
+        .from("payments")
+        .select("*")
+        .eq(
+          "payment_order_id",
+          orderId
+        )
+        .maybeSingle();
+
+    if (paymentError) {
+      console.error(
+        "Payment lookup error:",
+        paymentError
+      );
+
+      return send(res, 500, {
+        error:
+          "Payment record check nahi ho saka",
+      });
+    }
+
+    if (!payment) {
+      return send(res, 404, {
+        error:
+          "Payment order database mein nahi mila",
+      });
+    }
+
+    /*
+     * 🔐 Customer ownership
+     */
+    if (
+      payment.user_id &&
+      payment.user_id !== customerId
+    ) {
+      return send(res, 403, {
+        error:
+          "Aap is payment ke owner nahi ho",
+      });
+    }
+
+    /*
+     * 🧾 Razorpay signature
+     *
+     * HMAC SHA256:
+     * order_id + "|" + payment_id
+     */
+    const generatedSignature =
+      crypto
+        .createHmac(
+          "sha256",
+          RAZORPAY_KEY_SECRET
+        )
+        .update(
+          `${orderId}|${paymentId}`
+        )
+        .digest("hex");
+
+    const signatureValid =
+      safeCompare(
+        generatedSignature,
+        String(signature)
+      );
+
+    if (!signatureValid) {
+      console.error(
+        "Invalid Razorpay signature",
+        {
+          orderId,
+          paymentId,
+        }
+      );
+
+      return send(res, 400, {
+        error:
+          "Payment signature verification failed",
+      });
+    }
+
+    /*
+     * 🛡️ Order ID database mein jo hai
+     * wahi trusted source hai.
+     */
+    if (
+      String(
+        payment.payment_order_id
+      ) !== String(orderId)
+    ) {
+      return send(res, 400, {
+        error:
+          "Payment order mismatch",
+      });
+    }
+
+    /*
+     * 🔎 Razorpay se actual payment
+     * status fetch karo.
+     */
+    const razorpayPaymentResponse =
+      await fetch(
+        `${RAZORPAY_API}/payments/${encodeURIComponent(
+          paymentId
+        )}`,
+        {
+          method: "GET",
+
+          headers: {
+            Authorization:
+              `Basic ${razorpayAuth()}`,
+          },
+        }
+      );
+
+    const razorpayPayment =
+      await razorpayPaymentResponse
+        .json()
+        .catch(() => ({}));
+
+    if (
+      !razorpayPaymentResponse.ok
+    ) {
+      console.error(
+        "Razorpay payment fetch error:",
+        razorpayPayment
+      );
+
+      return send(res, 502, {
+        error:
+          razorpayPayment?.error
+            ?.description ||
+          "Razorpay payment status fetch nahi hua",
+      });
+    }
+
+    /*
+     * 💰 Amount verification
+     *
+     * Razorpay amount paise mein deta hai.
+     */
+    const gatewayAmount =
+      Number(
+        razorpayPayment?.amount
+      );
+
+    const databaseAmount =
+      Math.round(
+        Number(
+          payment.amount || 0
+        ) * 100
+      );
+
+    if (
+      !Number.isFinite(
+        gatewayAmount
+      ) ||
+      gatewayAmount !==
+        databaseAmount
+    ) {
+      console.error(
+        "Payment amount mismatch:",
+        {
+          gatewayAmount,
+          databaseAmount,
+        }
+      );
+
+      return send(res, 400, {
+        error:
+          "Payment amount mismatch detected",
+      });
+    }
+
+    /*
+     * Currency verification
+     */
+    const gatewayCurrency =
+      String(
+        razorpayPayment?.currency ||
+          ""
+      ).toUpperCase();
+
+    const databaseCurrency =
+      String(
+        payment.currency ||
+          "INR"
+      ).toUpperCase();
+
+    if (
+      gatewayCurrency &&
+      gatewayCurrency !==
+        databaseCurrency
+    ) {
+      return send(res, 400, {
+        error:
+          "Payment currency mismatch",
+      });
+    }
+
+    /*
+     * 🔎 Payment status
+     *
+     * captured = successful
+     * authorized = payment authorized
+     * failed = failed
+     * others = processing
+     */
+    const gatewayStatus =
+      String(
+        razorpayPayment?.status ||
+          ""
+      ).toLowerCase();
+
+    let finalStatus:
+      | "paid"
+      | "failed"
+      | "processing";
+
+    if (
+      gatewayStatus ===
+      "captured"
+    ) {
+      finalStatus = "paid";
+    } else if (
+      gatewayStatus ===
+      "failed"
+    ) {
+      finalStatus = "failed";
+    } else {
+      finalStatus = "processing";
+    }
+
+    /*
+     * 💾 Update payment
+     */
+    const updatePayload: any = {
+      payment_status:
+        finalStatus,
+
+      transaction_id:
+        paymentId,
+
+      payment_method:
+        razorpayPayment?.method ||
+        "razorpay",
+
+      payment_gateway:
+        "razorpay",
+    };
+
+    /*
+     * Optional Razorpay fields
+     */
+    if (
+      razorpayPayment?.email
+    ) {
+      updatePayload.gateway_email =
+        razorpayPayment.email;
+    }
+
+    if (
+      razorpayPayment?.contact
+    ) {
+      updatePayload.gateway_contact =
+        razorpayPayment.contact;
+    }
+
+    const {
+      data: updatedPayment,
+      error: updateError,
+    } =
+      await supabaseAdmin
+        .from("payments")
+        .update(updatePayload)
+        .eq(
+          "id",
+          payment.id
+        )
+        .select("*")
+        .single();
+
+    if (updateError) {
+      console.error(
+        "Payment update error:",
+        updateError
+      );
+
+      return send(res, 500, {
+        error:
+          "Payment verify hua lekin database update nahi hua",
+      });
+    }
+
+    /*
+     * 🎉 Successful payment
+     */
+    if (
+      finalStatus === "paid"
+    ) {
+      /*
+       * Customer notification
+       */
+      try {
+        await supabaseAdmin
+          .from("notifications")
+          .insert({
+            user_id:
+              customerId,
+
+            type:
+              "payment_paid",
+
+            title:
+              "🎉 Payment successful!",
+
+            message:
+              "JUGAAD payment verify ho gaya. Provider settlement process mein hai.",
+
+            read: false,
+          });
+      } catch {
+        /*
+         * Notification failure should
+         * not reverse a successful payment.
+         */
+      }
+
+      /*
+       * Provider notification
+       */
+      try {
+        const providerId =
+          payment.provider_id;
+
+        if (providerId) {
+          await supabaseAdmin
+            .from("notifications")
+            .insert({
+              user_id:
+                providerId,
+
+              type:
+                "payment_paid",
+
+              title:
+                "💰 JUGAAD payment receive hua!",
+
+              message:
+                "Customer ka payment successfully verify ho gaya.",
+
+              read: false,
+            });
+        }
+      } catch {
+        /*
+         * Non-critical.
+         */
+      }
+    }
+
+    /*
+     * ❌ Failed payment
+     */
+    if (
+      finalStatus === "failed"
+    ) {
+      try {
+        await supabaseAdmin
+          .from("notifications")
+          .insert({
+            user_id:
+              customerId,
+
+            type:
+              "payment_failed",
+
+            title:
+              "❌ Payment fail ho gaya",
+
+            message:
+              "Razorpay payment complete nahi ho saka. Dobara try kar sakte ho.",
+
+            read: false,
+          });
+      } catch {
+        /*
+         * Non-critical.
+         */
+      }
+    }
+
+    /*
+     * 📤 Frontend response
+     */
+    return send(res, 200, {
       success: true,
-      message: 'Payment verified successfully.',
-      paymentId:
-        updatedRows?.[0]?.id || payment.id,
-      razorpayPaymentId: razorpay_payment_id
+
+      status:
+        finalStatus,
+
+      paymentId,
+
+      orderId,
+
+      gatewayStatus,
+
+      payment:
+        updatedPayment,
+
+      message:
+        finalStatus === "paid"
+          ? "Payment successfully verified."
+          : finalStatus === "failed"
+            ? "Payment failed."
+            : "Payment received; final gateway confirmation is pending.",
     });
+  } catch (error: any) {
+    console.error(
+      "JUGAAD Razorpay verify-payment:",
+      error
+    );
 
-  } catch (error) {
-    console.error('verify-payment', error);
-
-    return res.status(error.status || 500).json({
-      success: false,
+    return send(res, 500, {
       error:
-        error.message ||
-        'Unable to verify Razorpay payment.'
+        error?.message ||
+        "Payment verification failed",
     });
   }
-};
+}
