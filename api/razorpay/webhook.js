@@ -476,4 +476,298 @@ export default async function handler(
       ).toUpperCase();
 
     const databaseCurrency =
-     
+      String(
+        payment.currency ||
+          "INR"
+      ).toUpperCase();
+
+    if (
+      gatewayCurrency !==
+      databaseCurrency
+    ) {
+      console.error(
+        "Webhook currency mismatch:",
+        {
+          gatewayCurrency,
+          databaseCurrency,
+        }
+      );
+
+      return send(res, 400, {
+        error:
+          "Payment currency mismatch",
+      });
+    }
+
+    /*
+     * 🔁 Idempotency
+     *
+     * Razorpay webhook can be delivered
+     * more than once.
+     *
+     * If same payment is already paid,
+     * don't downgrade it.
+     */
+    if (
+      payment.payment_status ===
+        "paid" &&
+      payment.transaction_id ===
+        razorpayPaymentId
+    ) {
+      return send(res, 200, {
+        success: true,
+        received: true,
+        alreadyProcessed: true,
+        event,
+        paymentId:
+          razorpayPaymentId,
+      });
+    }
+
+    /*
+     * Determine final payment status.
+     */
+    let finalStatus:
+      | "paid"
+      | "failed"
+      | "processing";
+
+    if (
+      event ===
+        "payment.captured" ||
+      String(
+        paymentEntity.status ||
+          ""
+      ).toLowerCase() ===
+        "captured"
+    ) {
+      finalStatus = "paid";
+    } else if (
+      event ===
+        "payment.failed" ||
+      String(
+        paymentEntity.status ||
+          ""
+      ).toLowerCase() ===
+        "failed"
+    ) {
+      finalStatus = "failed";
+    } else {
+      finalStatus = "processing";
+    }
+
+    /*
+     * Never downgrade an already-paid payment.
+     */
+    if (
+      payment.payment_status ===
+        "paid"
+    ) {
+      finalStatus = "paid";
+    }
+
+    /*
+     * Prepare update.
+     */
+    const updatePayload: any = {
+      payment_status:
+        finalStatus,
+
+      transaction_id:
+        razorpayPaymentId,
+
+      payment_method:
+        paymentEntity.method ||
+        "razorpay",
+
+      payment_gateway:
+        "razorpay",
+    };
+
+    /*
+     * Optional fields only if Razorpay
+     * sends them.
+     */
+    if (
+      paymentEntity.email
+    ) {
+      updatePayload.gateway_email =
+        paymentEntity.email;
+    }
+
+    if (
+      paymentEntity.contact
+    ) {
+      updatePayload.gateway_contact =
+        paymentEntity.contact;
+    }
+
+    /*
+     * Update our payment.
+     */
+    const {
+      data: updatedPayment,
+      error: updateError,
+    } =
+      await supabaseAdmin
+        .from("payments")
+        .update(updatePayload)
+        .eq(
+          "id",
+          payment.id
+        )
+        .select("*")
+        .single();
+
+    if (updateError) {
+      console.error(
+        "Webhook payment update error:",
+        updateError
+      );
+
+      return send(res, 500, {
+        error:
+          "Payment status update failed",
+      });
+    }
+
+    /*
+     * 🎉 Successful payment notification
+     */
+    if (
+      finalStatus === "paid"
+    ) {
+      try {
+        await supabaseAdmin
+          .from("notifications")
+          .insert({
+            user_id:
+              payment.user_id,
+
+            type:
+              "payment_paid",
+
+            title:
+              "🎉 Payment verified!",
+
+            message:
+              "Razorpay ne JUGAAD payment confirm kar diya. Provider settlement process mein hai.",
+
+            read: false,
+          });
+      } catch (
+        notificationError
+      ) {
+        console.warn(
+          "Customer notification failed:",
+          notificationError
+        );
+      }
+
+      /*
+       * Provider notification.
+       *
+       * provider_id may be stored directly
+       * on payment in the current schema.
+       */
+      if (
+        payment.provider_id
+      ) {
+        try {
+          await supabaseAdmin
+            .from("notifications")
+            .insert({
+              user_id:
+                payment.provider_id,
+
+              type:
+                "payment_paid",
+
+              title:
+                "💰 Payment aa gaya!",
+
+              message:
+                "Customer ka JUGAAD payment successfully verify ho gaya.",
+
+              read: false,
+            });
+        } catch (
+          notificationError
+        ) {
+          console.warn(
+            "Provider notification failed:",
+            notificationError
+          );
+        }
+      }
+    }
+
+    /*
+     * ❌ Failed payment notification
+     */
+    if (
+      finalStatus === "failed"
+    ) {
+      try {
+        await supabaseAdmin
+          .from("notifications")
+          .insert({
+            user_id:
+              payment.user_id,
+
+            type:
+              "payment_failed",
+
+            title:
+              "❌ Payment fail ho gaya",
+
+            message:
+              "Razorpay payment complete nahi hua. JUGAAD payment screen se dobara try kar sakte ho.",
+
+            read: false,
+          });
+      } catch (
+        notificationError
+      ) {
+        console.warn(
+          "Failed payment notification error:",
+          notificationError
+        );
+      }
+    }
+
+    /*
+     * 📦 Final response
+     */
+    return send(res, 200, {
+      success: true,
+
+      received: true,
+
+      event,
+
+      paymentId:
+        razorpayPaymentId,
+
+      orderId:
+        razorpayOrderId,
+
+      status:
+        finalStatus,
+
+      payment:
+        updatedPayment,
+    });
+  } catch (error: any) {
+    console.error(
+      "JUGAAD Razorpay webhook error:",
+      error
+    );
+
+    return send(res, 500, {
+      error:
+        error?.message ||
+        "Webhook processing failed",
+    });
+  }
+}
