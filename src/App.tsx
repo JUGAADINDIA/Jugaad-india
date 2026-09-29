@@ -76,6 +76,10 @@ type PaymentRow = {
   customer_id?: string | null;
   provider_id?: string | null;
   amount: number;
+  // Supabase payments table uses commission_percentage + commission_amount.
+  commission_percentage?: number | null;
+  commission_amount?: number | null;
+  // Legacy aliases kept only for safe display of older payment rows.
   platform_fee?: number | null;
   commission_rate?: number | null;
   provider_amount?: number | null;
@@ -123,6 +127,20 @@ const STATUS = {
 };
 
 const JUGAAD_COMMISSION_RATE = 0.10;
+
+const getPaymentCommissionAmount = (payment?: PaymentRow | null) =>
+  Number(
+    payment?.commission_amount ??
+    payment?.platform_fee ??
+    0
+  );
+
+const getPaymentCommissionPercentage = (payment?: PaymentRow | null) =>
+  Number(
+    payment?.commission_percentage ??
+    payment?.commission_rate ??
+    JUGAAD_COMMISSION_RATE * 100
+  );
 
 const categories = [
   "Sab",
@@ -440,9 +458,6 @@ export default function App() {
     const loadedProfile = data as Profile;
     const loadedRole = String(loadedProfile.role || "customer").toLowerCase();
 
-    // JUGAAD uses one common login link for every role.
-    // The role is taken only from the authenticated user's Supabase profile,
-    // so Customer, Provider and Admin automatically get their own interface.
     if (!['customer', 'provider', 'worker', 'service_provider', 'admin', 'super_admin'].includes(loadedRole)) {
       setProfile(null);
       setProfileLoading(false);
@@ -450,6 +465,65 @@ export default function App() {
       await supabase.auth.signOut();
       return;
     }
+
+    /*
+      PORTAL GUARD
+      ------------
+      The welcome screen has separate Customer/Provider entry buttons.
+      We persist the requested portal before OAuth starts and verify it
+      against the authenticated Supabase profile after the OAuth callback.
+
+      Supported dedicated links:
+        ?portal=customer
+        ?portal=provider
+        ?portal=admin
+
+      This is a UX/security boundary in the frontend. Supabase RLS and
+      server-side API authorization must still enforce the same roles.
+    */
+    let expectedPortal = "";
+    try {
+      expectedPortal =
+        String(localStorage.getItem("jugaad_login_portal") || "")
+          .trim()
+          .toLowerCase();
+    } catch {
+      expectedPortal = "";
+    }
+
+    const roleMatchesPortal =
+      !expectedPortal ||
+      (expectedPortal === "customer" && loadedRole === "customer") ||
+      (expectedPortal === "provider" &&
+        ["provider", "worker", "service_provider"].includes(loadedRole)) ||
+      (expectedPortal === "admin" &&
+        ["admin", "super_admin"].includes(loadedRole));
+
+    if (!roleMatchesPortal) {
+      const requestedLabel =
+        expectedPortal === "admin"
+          ? "Admin"
+          : expectedPortal === "provider"
+          ? "Provider"
+          : "Customer";
+
+      setProfile(null);
+      setProfileLoading(false);
+      setMessage(
+        `🔐 Ye account ${requestedLabel} portal ke liye authorized nahi hai. Sahi login link use karo.`
+      );
+
+      try {
+        localStorage.removeItem("jugaad_login_portal");
+      } catch {}
+
+      await supabase.auth.signOut();
+      return;
+    }
+
+    try {
+      localStorage.removeItem("jugaad_login_portal");
+    } catch {}
 
     setProfile(loadedProfile);
     setProfileName(loadedProfile.full_name || "");
@@ -1855,8 +1929,8 @@ export default function App() {
           customer_id: customerId,
           provider_id: providerId,
           amount,
-          commission_rate: JUGAAD_COMMISSION_RATE * 100,
-          platform_fee: platformFee,
+          commission_percentage: JUGAAD_COMMISSION_RATE * 100,
+          commission_amount: platformFee,
           provider_amount: providerAmount,
           payment_method: paymentMethod,
           transaction_id: paymentTransactionId.trim() || null,
@@ -1876,8 +1950,8 @@ export default function App() {
           customer_id: customerId,
           provider_id: providerId,
           amount,
-          commission_rate: JUGAAD_COMMISSION_RATE * 100,
-          platform_fee: platformFee,
+          commission_percentage: JUGAAD_COMMISSION_RATE * 100,
+          commission_amount: platformFee,
           provider_amount: providerAmount,
           settlement_status: "pending",
           settlement_id: null,
@@ -2191,10 +2265,7 @@ export default function App() {
           .reduce(
             (sum, p) =>
               sum +
-              Number(
-                p.platform_fee ||
-                  0
-              ),
+              getPaymentCommissionAmount(p),
             0
           );
 
@@ -2413,7 +2484,11 @@ export default function App() {
   /* ---------------- ROLE-BASED LOGIN ---------------- */
 
   if (!user) {
-    const login = async () => {
+    const login = async (portal: "customer" | "provider" | "admin") => {
+      try {
+        localStorage.setItem("jugaad_login_portal", portal);
+      } catch {}
+
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
@@ -2422,9 +2497,15 @@ export default function App() {
       });
 
       if (error) {
+        try {
+          localStorage.removeItem("jugaad_login_portal");
+        } catch {}
         setMessage(`❌ Login nahi hua: ${error.message}`);
       }
     };
+
+    const portalFromUrl =
+      new URLSearchParams(window.location.search).get("portal")?.toLowerCase() || "";
 
     return (
       <div className="auth-screen">
@@ -2436,23 +2517,32 @@ export default function App() {
           <div style={{ display: "grid", gap: 12, marginTop: 24 }}>
             <button
               className="primary-btn large"
-              onClick={login}
+              onClick={() => void login("customer")}
             >
               🙋 Customer Login →
             </button>
 
             <button
               className="secondary-btn"
-              onClick={login}
+              onClick={() => void login("provider")}
             >
               🧰 Provider Login →
             </button>
+
+            {portalFromUrl === "admin" && (
+              <button
+                className="secondary-btn"
+                onClick={() => void login("admin")}
+              >
+                🔐 Admin Login →
+              </button>
+            )}
           </div>
 
           <p className="small-note" style={{ marginTop: 18 }}>
-            🔗 Dono buttons ka login link ek hi hai. JUGAAD aapke account ka
-            role khud pehchan kar Customer, Provider ya Admin ka alag interface
-            kholega.
+            🙋 Customer aur 🧰 Provider ke login portals alag hain.
+            JUGAAD authenticated account ka role verify karke hi interface kholega.
+            Admin portal public welcome screen par nahi dikhaya jaata.
           </p>
 
           {message && <div className="toast">{message}</div>}
@@ -4837,7 +4927,7 @@ export default function App() {
 
                   <strong>
                     {Number(
-                      selectedPayment.commission_rate ?? 10
+                      getPaymentCommissionPercentage(selectedPayment)
                     ).toLocaleString("en-IN", {
                       maximumFractionDigits: 2,
                     })}%
@@ -6116,7 +6206,7 @@ export default function App() {
                               </div>
                               <div style={{ marginTop: 8, fontSize: 13, lineHeight: 1.45 }}>
                                 {requestPayment
-                                  ? `JUGAAD 10%: ₹${Number(requestPayment.platform_fee || 0).toLocaleString("en-IN")} • Provider: ₹${Number(requestPayment.provider_amount || 0).toLocaleString("en-IN")}`
+                                  ? `JUGAAD 10%: ₹${getPaymentCommissionAmount(requestPayment).toLocaleString("en-IN")} • Provider: ₹${Number(requestPayment.provider_amount || 0).toLocaleString("en-IN")}`
                                   : "Provider ka approved quote payment amount banega."}
                               </div>
                             </div>
