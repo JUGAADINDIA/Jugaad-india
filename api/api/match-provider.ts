@@ -1,160 +1,242 @@
+import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createClient } from "@supabase/supabase-js";
 
-const providerRoles = ["provider", "worker", "service_provider"];
-const MAX_MATCHES = 5;
+const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
+const SUPABASE_SERVICE_ROLE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-function clean(value: unknown) {
-  return String(value ?? "").trim();
+function send(
+  res: VercelResponse,
+  status: number,
+  body: unknown
+) {
+  return res.status(status).json(body);
 }
 
-function scoreProvider(provider: any, request: any) {
-  let score = 0;
-  if (provider.is_active !== false) score += 50;
-  if (provider.is_verified) score += 20;
-  score += Math.min(20, Number(provider.rating || 0) * 4);
-  score += Math.min(10, Number(provider.completed_job || 0));
+function getBearerToken(req: VercelRequest) {
+  const header = req.headers.authorization || "";
 
-  const haystack = [
-    provider.service_area,
-    provider.preferred_address,
-    provider.full_name,
+  if (!header.toLowerCase().startsWith("bearer ")) {
+    return "";
+  }
+
+  return header.slice(7).trim();
+}
+
+function normalize(value: unknown) {
+  return String(value || "")
+    .toLowerCase()
+    .trim();
+}
+
+function textMatches(
+  source: unknown,
+  search: string
+) {
+  if (!source || !search) return false;
+
+  const sourceText = normalize(source);
+  const searchText = normalize(search);
+
+  return (
+    sourceText.includes(searchText) ||
+    searchText.includes(sourceText)
+  );
+}
+
+function skillMatches(
+  skills: unknown,
+  need: string,
+  category: string
+) {
+  if (!skills) return false;
+
+  const skillText = normalize(skills);
+
+  const words = [
+    ...need.split(/[\s,./-]+/),
+    ...category.split(/[\s,./-]+/),
   ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-  const location = clean(request.location).toLowerCase();
+    .map((x) => normalize(x))
+    .filter((x) => x.length >= 3);
 
-  if (location && haystack && haystack.includes(location)) score += 30;
-  if (location) {
-    const parts = location.split(/[ ,]+/).filter((x) => x.length >= 3);
-    if (parts.some((part) => haystack.includes(part))) score += 10;
-  }
-
-  return score;
+  return words.some((word) =>
+    skillText.includes(word)
+  );
 }
 
-export default async function handler(req: any, res: any) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+function serviceAreaMatches(
+  serviceArea: unknown,
+  location: string
+) {
+  if (!serviceArea || !location) return false;
+
+  const area = normalize(serviceArea);
+  const loc = normalize(location);
+
+  const locationWords = loc
+    .split(/[,|/-]+|\s+/)
+    .map((x) => normalize(x))
+    .filter((x) => x.length >= 3);
+
+  return locationWords.some((word) =>
+    area.includes(word)
+  );
+}
+
+function isProviderAvailable(provider: any) {
+  if (provider?.is_active === false) {
+    return false;
   }
 
-  const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (
+    provider?.available === false ||
+    provider?.is_available === false
+  ) {
+    return false;
+  }
 
-  if (!supabaseUrl || !serviceRoleKey) {
-    return res.status(500).json({
-      error: "Supabase server environment variables missing.",
+  return true;
+}
+
+function getRating(provider: any) {
+  const rating = Number(provider?.rating);
+
+  if (!Number.isFinite(rating)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(5, rating));
+}
+
+function getVerificationScore(provider: any) {
+  if (
+    provider?.is_verified === true ||
+    provider?.verified === true
+  ) {
+    return 20;
+  }
+
+  return 0;
+}
+
+function calculateScore(
+  provider: any,
+  need: string,
+  category: string,
+  location: string
+) {
+  let score = 0;
+
+  /*
+   * 🧠 Skill match
+   */
+  if (
+    skillMatches(
+      provider.skills,
+      need,
+      category
+    )
+  ) {
+    score += 45;
+  }
+
+  /*
+   * 📍 Service area
+   */
+  if (
+    serviceAreaMatches(
+      provider.service_area,
+      location
+    )
+  ) {
+    score += 20;
+  }
+
+  /*
+   * ⭐ Rating
+   */
+  score += getRating(provider) * 4;
+
+  /*
+   * ✅ Verification
+   */
+  score += getVerificationScore(provider);
+
+  /*
+   * 🟢 Active/available
+   */
+  if (isProviderAvailable(provider)) {
+    score += 10;
+  }
+
+  return Math.round(score);
+}
+
+export default async function handler(
+  req: VercelRequest,
+  res: VercelResponse
+) {
+  if (req.method !== "POST") {
+    return send(res, 405, {
+      error: "Method not allowed",
     });
   }
 
-  const authHeader = String(req.headers?.authorization || "");
-  const accessToken = authHeader.replace(/^Bearer\s+/i, "").trim();
-  if (!accessToken) {
-    return res.status(401).json({ error: "Login session missing." });
+  if (
+    !SUPABASE_URL ||
+    !SUPABASE_SERVICE_ROLE_KEY
+  ) {
+    return send(res, 500, {
+      error:
+        "Supabase server configuration missing",
+    });
   }
 
-  const admin = createClient(supabaseUrl, serviceRoleKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
+  const token = getBearerToken(req);
 
-  const { data: authData, error: authError } = await admin.auth.getUser(accessToken);
-  if (authError || !authData?.user) {
-    return res.status(401).json({ error: "Invalid login session." });
+  if (!token) {
+    return send(res, 401, {
+      error: "Authorization token required",
+    });
   }
 
-  const { requestId, category, service, location } = req.body || {};
-  if (!requestId) {
-    return res.status(400).json({ error: "requestId required." });
-  }
-
-  const { data: request, error: requestError } = await admin
-    .from("requests")
-    .select("id,user_id,need,category,location,status")
-    .eq("id", requestId)
-    .eq("user_id", authData.user.id)
-    .single();
-
-  if (requestError || !request) {
-    return res.status(404).json({ error: "Request nahi mili." });
-  }
-
-  const { data: existingMatches } = await admin
-    .from("matches")
-    .select("provider_id,worker_id")
-    .eq("request_id", requestId);
-
-  const alreadyMatched = new Set(
-    (existingMatches || [])
-      .map((m: any) => m.provider_id || m.worker_id)
-      .filter(Boolean)
+  const supabaseAdmin = createClient(
+    SUPABASE_URL,
+    SUPABASE_SERVICE_ROLE_KEY,
+    {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    }
   );
 
-  const { data: providers, error: providerError } = await admin
-    .from("profiles")
-    .select("id,full_name,role,preferred_address,service_area,is_verified,is_active,rating,completed_job")
-    .in("role", providerRoles)
-    .neq("id", authData.user.id)
-    .limit(100);
+  try {
+    /*
+     * 🔐 Authenticated user
+     */
+    const {
+      data: authData,
+      error: authError,
+    } =
+      await supabaseAdmin.auth.getUser(token);
 
-  if (providerError) {
-    return res.status(500).json({ error: providerError.message });
-  }
-
-  const requestForScoring = {
-    ...request,
-    category: clean(category) || request.category,
-    service: clean(service),
-    location: clean(location) || request.location,
-  };
-
-  const ranked = (providers || [])
-    .filter((p: any) => p.is_active !== false && !alreadyMatched.has(p.id))
-    .map((provider: any) => ({
-      provider,
-      score: scoreProvider(provider, requestForScoring),
-    }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_MATCHES);
-
-  if (!ranked.length) {
-    return res.status(200).json({ matched_count: 0, providers: [] });
-  }
-
-  const rows = ranked.map(({ provider }) => ({
-    request_id: requestId,
-    provider_id: provider.id,
-    worker_id: provider.id,
-    status: "pending",
-    matches_status: "pending",
-  }));
-
-  const { error: matchError } = await admin.from("matches").insert(rows);
-  if (matchError) {
-    // A duplicate can happen if two calls race. In that case, return the already-created state.
-    if (!/duplicate|unique/i.test(matchError.message)) {
-      return res.status(500).json({ error: matchError.message });
+    if (
+      authError ||
+      !authData?.user
+    ) {
+      return send(res, 401, {
+        error: "Invalid login session",
+      });
     }
-  }
 
-  // Notifications are best-effort; matching should not fail if notification RLS/schema differs.
-  const notificationRows = ranked.map(({ provider }) => ({
-    user_id: provider.id,
-    title: "🛵 Naya JUGAAD kaam",
-    message: `Customer ko ${clean(service) || clean(category) || "help"} chahiye: ${clean(request.need).slice(0, 140)}`,
-    type: "new_request",
-    request_id: requestId,
-    is_read: false,
-  }));
-  if (notificationRows.length) {
-    await admin.from("notifications").insert(notificationRows);
-  }
+    const customerId =
+      authData.user.id;
 
-  return res.status(200).json({
-    matched_count: ranked.length,
-    providers: ranked.map(({ provider }) => ({
-      id: provider.id,
-      name: provider.full_name || "JUGAAD Provider",
-    })),
-  });
-}
-
+    const {
+      requestId,
+      need = "",
+      category = "",
+      location = "",
+      backup = false,
