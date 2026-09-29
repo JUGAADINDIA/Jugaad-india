@@ -1,133 +1,368 @@
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const MODEL = process.env.OPENAI_MODEL || "gpt-5.6-luna";
-const TRANSCRIBE_MODEL = process.env.OPENAI_TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe";
+import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-function sendJson(res: any, status: number, body: unknown) {
-  res.status(status).setHeader("Content-Type", "application/json; charset=utf-8").send(body);
+const OPENAI_URL = "https://api.openai.com/v1";
+
+function json(res: VercelResponse, status: number, body: unknown) {
+  return res.status(status).json(body);
 }
 
-function extractJson(text: string) {
-  const cleaned = String(text || "")
-    .replace(/```json/gi, "")
-    .replace(/```/g, "")
+function stripCodeFence(value: string) {
+  return value
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
     .trim();
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start < 0 || end < start) throw new Error("AI returned invalid JSON");
-  return JSON.parse(cleaned.slice(start, end + 1));
 }
 
-function parseDataUrl(value: string) {
-  const match = String(value || "").match(/^data:([^;]+);base64,(.+)$/s);
-  if (!match) throw new Error("Invalid media data");
-  return { mime: match[1], buffer: Buffer.from(match[2], "base64") };
-}
+async function transcribeAudio(dataUrl: string, apiKey: string) {
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
 
-async function transcribeAudio(dataUrl: string) {
-  const { mime, buffer } = parseDataUrl(dataUrl);
-  if (buffer.length > 8 * 1024 * 1024) {
-    throw new Error("Voice recording bahut badi hai. 30 seconds ke andar dobara record karo.");
+  if (!match) {
+    throw new Error("Invalid audio data");
   }
+
+  const mime = match[1] || "audio/webm";
+  const bytes = Buffer.from(match[2], "base64");
+
+  const ext = mime.includes("mp4")
+    ? "m4a"
+    : mime.includes("ogg")
+      ? "ogg"
+      : "webm";
 
   const form = new FormData();
-  const extension = mime.includes("mp4") ? "m4a" : mime.includes("ogg") ? "ogg" : "webm";
-  form.append("file", new Blob([buffer], { type: mime }), `jugaad-voice.${extension}`);
-  form.append("model", TRANSCRIBE_MODEL);
-  form.append("response_format", "json");
 
-  const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
-    body: form,
-  });
+  form.append(
+    "file",
+    new Blob([bytes], { type: mime }),
+    `jugaad.${ext}`
+  );
 
-  const raw = await response.text();
-  let data: any = null;
-  try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
+  form.append(
+    "model",
+    process.env.OPENAI_TRANSCRIBE_MODEL ||
+      "gpt-4o-mini-transcribe"
+  );
+
+  form.append("language", "hi");
+
+  const response = await fetch(
+    `${OPENAI_URL}/audio/transcriptions`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: form,
+    }
+  );
+
+  const data = await response
+    .json()
+    .catch(() => ({}));
+
   if (!response.ok) {
-    throw new Error(data?.error?.message || raw.slice(0, 180) || "Voice transcription failed");
+    throw new Error(
+      data?.error?.message ||
+        "Audio transcription failed"
+    );
   }
+
   return String(data?.text || "").trim();
 }
 
-export default async function handler(req: any, res: any) {
-  if (req.method !== "POST") return sendJson(res, 405, { error: "POST only" });
-  if (!OPENAI_API_KEY) return sendJson(res, 500, { error: "OPENAI_API_KEY Vercel mein configured nahi hai." });
+export default async function handler(
+  req: VercelRequest,
+  res: VercelResponse
+) {
+  if (req.method !== "POST") {
+    return json(res, 405, {
+      error: "Method not allowed",
+    });
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    return json(res, 500, {
+      error:
+        "OPENAI_API_KEY is not configured",
+    });
+  }
 
   try {
-    const body = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
-    const text = String(body.text || "").trim();
-    const imageDataUrl = String(body.imageDataUrl || "");
-    const audioDataUrl = String(body.audioDataUrl || "");
+    const {
+      text = "",
+      imageDataUrl = "",
+      audioDataUrl = "",
+    } = req.body || {};
 
-    // Protect the Vercel function from oversized base64 payloads.
-    if (imageDataUrl.length > 3_500_000) {
-      return sendJson(res, 413, { error: "Photo AI ke liye bahut badi hai. Photo dobara upload karo; app use automatically compress karegi." });
+    let spokenText = "";
+
+    /*
+     * 🎙️ VOICE
+     */
+    if (audioDataUrl) {
+      spokenText = await transcribeAudio(
+        String(audioDataUrl),
+        apiKey
+      );
     }
 
-    let transcript = "";
-    if (audioDataUrl) transcript = await transcribeAudio(audioDataUrl);
+    /*
+     * Text + voice ko combine karo
+     */
+    const combinedText = [
+      String(text).trim(),
+      spokenText,
+    ]
+      .filter(Boolean)
+      .join("\n");
 
-    const combined = [text, transcript].filter(Boolean).join("\n");
-    if (!combined && !imageDataUrl) {
-      return sendJson(res, 400, { error: "Text, voice ya photo required hai." });
+    if (!combinedText && !imageDataUrl) {
+      return json(res, 400, {
+        error:
+          "Text, voice or photo is required",
+      });
     }
 
-    const instruction = `You are JUGAAD India AI, a practical Indian real-world service/help request assistant.
-Understand Hindi, Hinglish, English and regional-language speech. A user may describe a problem or show a photo.
-Identify the likely service/help needed. Do not claim a dangerous medical, electrical, gas or structural diagnosis.
-Return ONLY valid JSON with exactly these keys:
-need, problem, category, suggested_service, confidence, safety_note, next_step, solution.
-category must be one of: Home, Repair, Delivery, Personal, Business, Sab.
-confidence must be a number from 0 to 1.
-If uncertain, lower confidence. Do not invent details.
-The solution must be a practical, safe JUGAAD action or the appropriate professional service to contact. For a photo, use only what is visibly supported by the image; do not pretend to know hidden internal faults.
+    /*
+     * 🤖 JUGAAD AI PROMPT
+     */
+    const content: any[] = [
+      {
+        type: "input_text",
+        text: `
+You are JUGAAD India, an Indian real-world
+service/help request understanding assistant.
 
-User text/transcript:
-${combined || "(none)"}`;
+Your job is to understand what a customer
+actually needs.
 
-    const content: any[] = [{ type: "input_text", text: instruction }];
-    if (imageDataUrl) content.push({ type: "input_image", image_url: imageDataUrl });
+The customer may speak or write in:
 
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-        "Content-Type": "application/json",
+- Hindi
+- Hinglish
+- English
+- Indian local/common phrases
+
+Understand the actual requirement.
+
+Do NOT invent facts.
+
+If the request appears illegal or dangerous,
+do not provide instructions for illegal activity.
+Instead explain the concern in safety_note.
+
+Return ONLY valid JSON.
+
+Use exactly these fields:
+
+{
+  "need": "short customer-friendly requirement",
+  "problem": "what is wrong or needed",
+  "category": "Home | Repair | Delivery | Personal | Business | Education | Travel | Digital | Other",
+  "suggested_service": "best service/provider type",
+  "confidence": 0.0,
+  "safety_note": "",
+  "next_step": "",
+  "solution": ""
+}
+
+Rules:
+
+1. confidence must be between 0 and 1.
+
+2. Do not invent the customer's location.
+
+3. Do not invent a price.
+
+4. Do not invent a provider.
+
+5. If the requirement is unclear,
+   keep confidence low.
+
+6. If a photo is provided, use the photo
+   to understand the visible problem.
+
+7. If voice is provided, use its transcript.
+
+8. Keep "need" short and understandable.
+
+9. "suggested_service" should describe
+   the type of provider needed.
+
+10. JUGAAD India is NOT an e-commerce
+    marketplace. It connects real-world
+    customer needs with suitable help/service.
+
+Customer input:
+
+${combinedText || "(No text; inspect the photo.)"}
+`,
       },
-      body: JSON.stringify({
-        model: MODEL,
-        input: [{ role: "user", content }],
-        text: { format: { type: "json_object" } },
-      }),
-    });
+    ];
 
-    const raw = await response.text();
-    let data: any = null;
-    try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
+    /*
+     * 📸 PHOTO
+     */
+    if (imageDataUrl) {
+      content.push({
+        type: "input_image",
+        image_url: String(imageDataUrl),
+      });
+    }
+
+    /*
+     * 🤖 OPENAI
+     */
+    const response = await fetch(
+      `${OPENAI_URL}/responses`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model:
+            process.env.OPENAI_ANALYZE_MODEL ||
+            "gpt-5.6-luna",
+
+          input: [
+            {
+              role: "user",
+              content,
+            },
+          ],
+
+          max_output_tokens: 500,
+        }),
+      }
+    );
+
+    const data = await response
+      .json()
+      .catch(() => ({}));
+
     if (!response.ok) {
-      throw new Error(data?.error?.message || raw.slice(0, 240) || "AI analysis failed");
+      return json(res, response.status, {
+        error:
+          data?.error?.message ||
+          "OpenAI analysis failed",
+      });
     }
 
-    const outputText = String(data?.output_text || "").trim();
+    /*
+     * OpenAI response se text nikalo
+     */
+    const outputText =
+      String(
+        data?.output_text || ""
+      ).trim() ||
+      (Array.isArray(data?.output)
+        ? data.output
+            .flatMap(
+              (item: any) =>
+                item?.content || []
+            )
+            .map(
+              (item: any) =>
+                item?.text || ""
+            )
+            .join("")
+        : "");
+
     if (!outputText) {
-      throw new Error("AI ne empty response diya. OPENAI_MODEL/API configuration check karo.");
+      return json(res, 502, {
+        error:
+          "AI returned an empty response",
+      });
     }
-    const result = extractJson(outputText);
-    result.need = String(result.need || combined || "").trim();
-    result.problem = String(result.problem || result.need || "").trim();
-    result.category = ["Home", "Repair", "Delivery", "Personal", "Business", "Sab"].includes(String(result.category))
-      ? String(result.category)
-      : "Sab";
-    result.suggested_service = String(result.suggested_service || "General JUGAAD").trim();
-    result.solution = String(result.solution || result.next_step || "Appropriate service/provider se JUGAAD karvao.").trim();
-    result.confidence = Math.max(0, Math.min(1, Number(result.confidence) || 0));
 
-    return sendJson(res, 200, { result, transcript });
-  } catch (error) {
-    console.error("JUGAAD AI error", error);
-    return sendJson(res, 500, {
-      error: error instanceof Error ? error.message : "AI analysis failed",
+    /*
+     * JSON parse
+     */
+    let result: any;
+
+    try {
+      result = JSON.parse(
+        stripCodeFence(outputText)
+      );
+    } catch {
+      return json(res, 502, {
+        error:
+          "AI returned invalid JSON",
+        raw: outputText.slice(0, 1000),
+      });
+    }
+
+    /*
+     * Confidence safety
+     */
+    result.confidence = Math.max(
+      0,
+      Math.min(
+        1,
+        Number(result.confidence || 0)
+      )
+    );
+
+    /*
+     * Default values
+     */
+    result.need =
+      String(result.need || "").trim();
+
+    result.problem =
+      String(result.problem || "").trim();
+
+    result.category =
+      String(result.category || "Other").trim();
+
+    result.suggested_service =
+      String(
+        result.suggested_service || ""
+      ).trim();
+
+    result.safety_note =
+      String(
+        result.safety_note || ""
+      ).trim();
+
+    result.next_step =
+      String(
+        result.next_step || ""
+      ).trim();
+
+    result.solution =
+      String(
+        result.solution || ""
+      ).trim();
+
+    /*
+     * 🎯 FINAL RESPONSE
+     */
+    return json(res, 200, {
+      result,
+
+      /*
+       * Voice use hua tha to transcript bhi
+       * frontend ko milega.
+       */
+      transcript:
+        spokenText || undefined,
+    });
+  } catch (error: any) {
+    console.error(
+      "JUGAAD analyze-need:",
+      error
+    );
+
+    return json(res, 500, {
+      error:
+        error?.message ||
+        "AI analysis failed",
     });
   }
 }
